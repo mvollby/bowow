@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Ranked BOWOW grant matches">
+<title>Grant matches · BOWOW</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="results.js" defer></script>
+</head>
+<body>
+<header class="top results-top">
+<a class="small-logo" href="./"><img src="logo.png" alt="BOWOW home"></a>
+<a id="edit-search" href="./">Edit search</a>
+</header>
+<main class="results-page">
+  <section class="overview" aria-labelledby="overview-title">
+    <p class="eyebrow">Grant matches · Demo</p>
+    <h1 id="overview-title">Match summary</h1>
+    <p id="match-summary"></p>
+    <p class="note">Illustrative grants and scores. Rankings use your filters and detected program topics. Links open funding source websites.</p>
+  </section>
+  <section class="matches" aria-labelledby="matches-title">
+    <div class="section-head"><h2 id="matches-title">Grants found</h2><span id="match-count"></span></div>
+    <div id="result-list"></div>
+  </section>
+</main>
+<footer><span>Brought to you by</span><span class="dandori"><img src="dandori-flower.svg" alt="">dandori</span></footer>
+</body>
+</html>

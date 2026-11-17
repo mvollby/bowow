@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Explore grant opportunities for nonprofits and student programs.">
+<title>BOWOW</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top"><button type="button" class="nav-link" data-dialog="about">About</button><button type="button" class="nav-link" data-dialog="sources">Saved funding sources</button></header>
+<main>
+<form id="search" action="results.html" novalidate>
+<section class="hero" aria-labelledby="title">
+<h1 id="title"><img src="logo.png" alt="bowow"></h1>
+<p class="tagline">bursaries. opportunities. within one website.</p>
+</section>
+<section class="panel" aria-labelledby="profile-title">
+<div class="section-head"><h2 id="profile-title">Build your grant profile</h2><span>Optional</span></div>
+<div class="cards">
+<article class="card"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4v18m0-11h6v11M8 9h2m-2 4h2m-2 4h2m5-3h1m-1 3h1"/></svg></span><h3>Organization &amp; status</h3><p>Registration, charity status, mission, and applicant type.</p><label for="website">Organization website</label><input type="url" id="website" placeholder="https://example.org"><div class="attachment" data-upload="organization"><button type="button" class="pick">+ Add documents</button><input type="file" multiple hidden></div><ul class="files" id="organization-files"></ul></article>
+<article class="card"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="m2 9 10-5 10 5-10 5L2 9Zm4 2v5c3 3 9 3 12 0v-5m4-2v6"/></svg></span><h3>Program &amp; beneficiaries</h3><p>Who you serve, where, and how the grant would support them.</p><label for="program">Program summary</label><textarea id="program" rows="1" placeholder="e.g. Bursaries for rural students"></textarea><div class="attachment" data-upload="program"><button type="button" class="pick">+ Add documents</button><input type="file" multiple hidden></div><ul class="files" id="program-files"></ul></article>
+<article class="card"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20m5-15a3 3 0 0 0-3-2h-3a3.5 3.5 0 0 0 0 7h2a3.5 3.5 0 0 1 0 7h-3a3 3 0 0 1-3-2"/></svg></span><h3>Budget &amp; finances</h3><p>Project budget, audited statements, and any committed matching funds.</p><div class="attachment" data-upload="budget"><button type="button" class="pick">+ Add documents</button><input type="file" multiple hidden></div><ul class="files" id="budget-files"></ul></article>
+<article class="card"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4 1 9l4 3 3-6-5-2Zm18 0 2 5-4 3-3-6 5-2ZM8 6l3-1a3 3 0 0 1 2 0l3 1m-5 0L8 9a1.5 1.5 0 0 0 2 2l2-2 6 6a1.4 1.4 0 0 1-2 2l-1-1m1 1a1.4 1.4 0 0 1-2 2l-1-1m1 1a1.4 1.4 0 0 1-2 2L5 14l-1-2m14 3 2-3"/></svg></span><h3>Partners &amp; track record</h3><p>Partner letters, past results, and fiscal sponsor details.</p><div class="attachment" data-upload="partners"><button type="button" class="pick">+ Add documents</button><input type="file" multiple hidden></div><ul class="files" id="partners-files"></ul></article>
+</div>
+<div class="supporting-upload" data-upload="supporting">
+<span class="upload-icon" aria-hidden="true">↑</span>
+<strong>Any supporting documentation important to understanding your organization</strong>
+<button type="button" class="secondary pick">Browse files</button>
+<input type="file" multiple hidden>
+</div>
+<ul class="files" id="supporting-files" aria-label="Selected supporting documents"></ul>
+<p class="note file-status" id="file-status" role="status"></p>
+<p class="note">For student programs, use aggregate numbers and program summaries. Leave out student records and identifiers.</p>
+</section>
+<details class="panel filters" id="filters">
+<summary><span>Search filters</span><span class="optional">Optional · Helps rank results</span></summary>
+<div class="filter-grid">
+<label>Applicant type<select id="applicant"><option value="">Any applicant</option><option>Nonprofit</option><option>School</option><option>Individual</option></select></label>
+<label>Project location<select id="region"><option value="">Anywhere</option><option>Canada</option><option>United States</option><option>European Union</option><option>International</option></select></label>
+<label>Funding purpose<select id="purpose"><option value="">Any purpose</option><option>Student aid</option><option>Program delivery</option><option>Operating costs</option><option>Research</option></select></label>
+<label>Funder type<select id="funder"><option value="">Any funder</option><option>Government</option><option>Foundation</option></select></label>
+<label>Funding currency<select id="currency"><option value="">Any currency</option><option>CAD</option><option>USD</option><option>EUR</option></select></label>
+<label>Minimum award<input id="minimum" type="number" min="0" placeholder="No minimum"></label>
+<label>Maximum award<input id="maximum" type="number" min="0" placeholder="No maximum"></label>
+<label>Application route<select id="route"><option value="">Any route</option><option>Open call</option><option>Invitation only</option></select></label>
+<label>Matching funds<select id="match"><option value="">Any requirement</option><option>No match required</option><option>Match required</option></select></label>
+<label>Partners<select id="partners"><option value="">Any requirement</option><option>No partner required</option><option>Partner required</option></select></label>
+<label>Deadline on or before<input type="date" id="deadline"></label>
+</div>
+<div class="filter-actions"><button type="button" class="secondary" id="clear">Clear filters</button></div>
+</details>
+<div class="search-action"><button type="submit" class="primary">Apply &amp; Search</button></div>
+</form>
+</main>
+<footer><span>Brought to you by</span><span class="dandori"><img src="dandori-flower.svg" alt="">dandori</span></footer>
+<dialog id="about" aria-labelledby="about-title">
+  <h2 id="about-title">About BOWOW</h2>
+  <p>BOWOW is a grant discovery prototype for nonprofits and student programs. Attach documents to organize a grant profile, or explore sample listings with the filters.</p>
+  <p>Selected files stay in this browser session. The prototype displays the filenames and uses sample funding data.</p>
+  <form method="dialog"><button class="secondary">Close</button></form>
+</dialog>
+<dialog id="sources" aria-labelledby="sources-title">
+  <h2 id="sources-title">Saved funding sources</h2>
+  <div class="source-links"><a href="https://www.grants.gov/learn-grants/grant-eligibility">Grants.gov</a><a href="https://feddev-ontario.canada.ca/en/funding-southern-ontario/funding-organizations-help-businesses-grow-southern-ontario-how-apply">Government of Canada</a><a href="https://www.gatesfoundation.org/about/our-funding">Gates Foundation</a><a href="https://commission.europa.eu/funding-and-tenders/how-apply/eligibility-who-can-get-funding_en">European Commission</a></div>
+  <form method="dialog"><button class="secondary">Close</button></form>
+</dialog>
+
+</body>
+</html>
