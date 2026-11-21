@@ -179,6 +179,46 @@ sample. A 200,000-row scan returned 6 departments and no education ministry;
 the full 1.38M-row pass returns 46. Use `--max-rows 0` for the real thing, at
 about 2.5 GB of download.
 
+## Registry lookups
+
+Real applicant profiles from the two public registries, replacing the
+fixtures:
+
+```bash
+python -m bowow_pipeline lookup --country US --search "reading partners"
+python -m bowow_pipeline lookup --country US --id 77-0568469 --save
+python -m bowow_pipeline lookup --country CA --search literacy
+python -m bowow_pipeline lookup --country CA --id 107782609RR0001 --save
+```
+
+US uses the ProPublica Nonprofit Explorer API, live and keyless. Canada uses
+the CRA List of Charities, about 33 MB of CSV cached on first use. CRA
+resource ids change with every annual release, so the current dataset is
+discovered through CKAN and chosen by the year in its title, not by
+modification date, because old releases get re-touched.
+
+Two findings worth carrying forward:
+
+**The two countries are not symmetric.** The CRA financial file has a real
+charitable-programme expenditure line, so Canadian profiles carry both revenue
+and programme cost. ProPublica exposes `totrevenue` and `totfuncexpns` but no
+programme-service line; `totfuncexpns` is TOTAL functional expenses, so US
+profiles carry revenue and leave programme cost unset rather than relabelling
+a different number as that one.
+
+T3010 line numbers were verified against the live file, not read off the form:
+`4700` total revenue, `4950` total expenditures, `5000` expenditure on
+charitable programmes.
+
+**Neither registry publishes mission text.** That matters because topical fit
+is the largest-weighted component, and a registry profile arrives with none.
+The organization's legal name is therefore part of its topical text, since
+charity names are usually descriptive. A real lookup of Literacy North Halton
+matched a dairy investment programme on budget alone until the name was
+included; with it, the top match is the Adult Learning, Literacy and Essential
+Skills Programme at 0.83. A mission typed by the applicant would be better
+still, and is the obvious next input.
+
 ## Matching
 
 `match` scores one organization against the corpus in two stages.

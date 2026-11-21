@@ -21,6 +21,7 @@ from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
 from .ingest import run_ingest
 from .match import rank
 from .models import Org, days_until, utcnow
+from .registry import get_registry
 from .topics import concepts_for
 from .rawstore import RawStore
 from .store import Store
@@ -30,6 +31,7 @@ DB_PATH = DATA / "bowow.db"
 RAW_PATH = DATA / "raw"
 CACHE_PATH = DATA / "extraction_cache"
 FIXTURE_ORGS = Path(__file__).resolve().parent.parent / "fixtures" / "orgs_ca.json"
+REGISTRY_CACHE = DATA / "registry"
 # The static site lives one level up from the pipeline package.
 SITE_ROOT = Path(__file__).resolve().parent.parent.parent
 WEB_DATA = SITE_ROOT / "data" / "opportunities.json"
@@ -294,6 +296,55 @@ def cmd_profiles(args) -> None:
     store.close()
 
 
+def cmd_lookup(args) -> None:
+    """Pull a real profile from a public charity registry."""
+    store, _ = _open()
+    registry = get_registry(args.country, REGISTRY_CACHE)
+
+    if args.search:
+        hits = registry.search(args.search)
+        if not hits:
+            print(f"no {args.country.upper()} registry match for {args.search!r}")
+            store.close()
+            return
+        print(f"{len(hits)} candidates (look up the one you want by id):")
+        for h in hits:
+            if args.country.upper() == "US":
+                print(f"  {h.get('strein','?'):12} {str(h.get('name'))[:46]:46} "
+                      f"{h.get('city','')}, {h.get('state','')}")
+            else:
+                print(f"  {h.get('BN','?'):16} {str(h.get('Legal Name'))[:44]:44} "
+                      f"{h.get('City','')}, {h.get('Province','')}")
+        store.close()
+        return
+
+    org = registry.fetch(args.id)
+    if org is None:
+        print(f"no {args.country.upper()} registry record for {args.id!r}")
+        store.close()
+        return
+
+    rev = f"${org.revenue:,.0f}" if org.revenue is not None else "not filed"
+    prog = (f"${org.program_expense:,.0f}" if org.program_expense is not None
+            else "not published by this registry")
+    print(f"{org.name}")
+    print(f"  {org.applicant_type}, {org.region}, {org.country}")
+    print(f"  registry id    {org.registry_id}")
+    print(f"  status         {org.status}")
+    print(f"  revenue        {rev}")
+    print(f"  programme cost {prog}")
+    print(f"  categories     {', '.join(org.categories) or '(none)'}")
+
+    if args.save:
+        print(f"\nsaved: {store.upsert_org(org)} as {org.org_id}")
+        if not org.mission:
+            print("  note: this registry publishes no mission text, so topical "
+                  "matching will be weak until a mission is added")
+    else:
+        print("\n(pass --save to store this profile)")
+    store.close()
+
+
 def cmd_match(args) -> None:
     store, _ = _open()
     org = store.find_org(args.org)
@@ -462,6 +513,13 @@ def main(argv=None) -> None:
     pf.add_argument("action", choices=("load", "list"), nargs="?", default="list")
     pf.add_argument("--file", help="fixture JSON to load (default: Canadian set)")
     pf.set_defaults(func=cmd_profiles)
+
+    lu = sub.add_parser("lookup", help="fetch a real profile from a registry")
+    lu.add_argument("--country", choices=("US", "CA", "us", "ca"), required=True)
+    lu.add_argument("--id", help="EIN (US) or Business Number (CA)")
+    lu.add_argument("--search", help="search the registry by name instead")
+    lu.add_argument("--save", action="store_true", help="store the profile")
+    lu.set_defaults(func=cmd_lookup)
 
     m = sub.add_parser("match", help="score one organization against the corpus")
     m.add_argument("org", help="org_id or part of the name")

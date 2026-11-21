@@ -117,7 +117,13 @@ def _gates(org: Org, opp: Opportunity) -> tuple[list, list, list]:
 
 
 def _org_text(org: Org) -> str:
-    return " ".join([" ".join(org.categories), org.mission, org.beneficiaries])
+    # The name is included deliberately. Neither public registry publishes
+    # mission text, so for a profile pulled from one the legal name is the
+    # only topical signal there is, and charity names are usually descriptive
+    # ("Literacy North Halton"). Without it a real registry profile matched
+    # on budget and funder volume alone.
+    return " ".join([org.name, " ".join(org.categories), org.mission,
+                     org.beneficiaries])
 
 
 def _grant_text(opp: Opportunity) -> str:
