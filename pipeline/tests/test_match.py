@@ -160,3 +160,23 @@ def test_fixtures_cover_a_range_of_budget_bands():
     data = json.loads(FIXTURES.read_text(encoding="utf-8"))
     bands = {Org(**r).budget_band for r in data["orgs"]}
     assert {"small", "mid", "large", "unknown"} <= bands
+
+
+# --- mission validation ----------------------------------------------------
+
+def test_placeholder_text_is_refused_as_a_mission():
+    """Regression: the documentation placeholder "..." was pasted verbatim and
+    accepted, replacing a real 330-character description with three characters
+    of punctuation. No registry publishes mission text, so it was gone."""
+    from bowow_pipeline.models import mission_problem
+    assert "too short" in mission_problem("...")
+    assert mission_problem("") 
+    assert "placeholder" in mission_problem("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+
+def test_a_short_but_real_mission_is_accepted():
+    """The guard must not reject genuine brevity."""
+    from bowow_pipeline.models import mission_problem
+    assert mission_problem("We help adults learn to read.") == ""
+    assert mission_problem(
+        "Bursaries for rural students entering trades training.") == ""
