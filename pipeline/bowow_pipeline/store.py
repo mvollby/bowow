@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS org (
   name TEXT NOT NULL, country TEXT, region TEXT,
   applicant_type TEXT, registry_id TEXT, status TEXT,
   revenue REAL, program_expense REAL,
-  categories TEXT, mission TEXT, beneficiaries TEXT,
+  categories TEXT, mission TEXT, beneficiaries TEXT, website TEXT,
   synthetic INTEGER DEFAULT 0,
   first_seen TEXT NOT NULL
 );
@@ -97,7 +97,24 @@ class Store:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    # Columns added after a table first shipped. CREATE TABLE IF NOT EXISTS
+    # leaves an existing table alone, so a new column has to be added
+    # explicitly or every insert against an older database fails.
+    MIGRATIONS = (
+        ("org", "website", "TEXT"),
+        ("award", "amendment", "INTEGER DEFAULT 0"),
+    )
+
+    def _migrate(self) -> None:
+        for table, column, decl in self.MIGRATIONS:
+            existing = {r["name"] for r in
+                        self.conn.execute(f"PRAGMA table_info({table})")}
+            if existing and column not in existing:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -223,19 +240,20 @@ class Store:
                   org.applicant_type, org.registry_id, org.status,
                   org.revenue, org.program_expense,
                   json.dumps(org.categories), org.mission, org.beneficiaries,
-                  int(org.synthetic))
+                  org.website, int(org.synthetic))
         if existing:
             self.conn.execute(
                 "UPDATE org SET name=?, country=?, region=?, applicant_type=?, "
                 "registry_id=?, status=?, revenue=?, program_expense=?, "
-                "categories=?, mission=?, beneficiaries=?, synthetic=? "
+                "categories=?, mission=?, beneficiaries=?, website=?, synthetic=? "
                 "WHERE org_id=?", (*values[1:], org.org_id))
             self.conn.commit()
             return "updated"
         self.conn.execute(
             "INSERT INTO org (org_id, name, country, region, applicant_type, "
             "registry_id, status, revenue, program_expense, categories, mission, "
-            "beneficiaries, synthetic, first_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "beneficiaries, website, synthetic, first_seen) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*values, utcnow()))
         self.conn.commit()
         return "inserted"
@@ -249,6 +267,7 @@ class Store:
             revenue=row["revenue"], program_expense=row["program_expense"],
             categories=json.loads(row["categories"] or "[]"),
             mission=row["mission"] or "", beneficiaries=row["beneficiaries"] or "",
+            website=(row["website"] if "website" in row.keys() else "") or "",
             synthetic=bool(row["synthetic"]))
 
     def orgs(self) -> list[Org]:

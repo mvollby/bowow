@@ -4,7 +4,8 @@
     {
       "name": "bowow",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8000"],
+      "runtimeArgs": ["-m", "bowow_pipeline", "serve", "--port", "8000"],
+      "cwd": "pipeline",
       "port": 8000
     }
   ]

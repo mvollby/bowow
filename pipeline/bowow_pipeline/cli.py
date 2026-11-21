@@ -21,6 +21,7 @@ from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
 from .ingest import run_ingest
 from .match import rank
 from .models import Org, days_until, mission_problem, utcnow
+from .api import serve
 from .evaluate import evaluate, labelling_sheet, load_pairs
 from .registry import get_registry
 from .topics import concepts_for
@@ -530,6 +531,11 @@ def cmd_eval(args) -> None:
     store.close()
 
 
+def cmd_serve(args) -> None:
+    """Serve the static site and the profile API from one origin."""
+    serve(str(DB_PATH), str(SITE_ROOT), port=args.port)
+
+
 def cmd_export(args) -> None:
     """Write the corpus as JSON for the front end to fetch.
 
@@ -670,6 +676,10 @@ def main(argv=None) -> None:
     ev.add_argument("--top", type=int, default=10)
     ev.add_argument("--sample", type=int, default=5)
     ev.set_defaults(func=cmd_eval)
+
+    sv = sub.add_parser("serve", help="run the site and profile API locally")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.set_defaults(func=cmd_serve)
 
     ck = sub.add_parser("check", help="verify extraction credentials and setup")
     ck.add_argument("--live", action="store_true",
