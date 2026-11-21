@@ -205,6 +205,32 @@ TOPIC_PATTERNS = (
 )
 
 
+# A mission has to be real prose to be worth anything to topical matching.
+MIN_MISSION_CHARS = 25
+MIN_MISSION_WORDS = 5
+
+
+def mission_problem(text: str) -> str:
+    """Why this text is not a usable mission, or empty string if it is.
+
+    Exists because a documentation placeholder, "...", was pasted verbatim
+    and accepted, silently replacing a real 330-character description with
+    three characters of punctuation. No registry publishes mission text, so
+    the overwritten version was unrecoverable.
+    """
+    cleaned = (text or "").strip()
+    if len(cleaned) < MIN_MISSION_CHARS:
+        return (f"too short to describe an organization "
+                f"({len(cleaned)} chars, need {MIN_MISSION_CHARS})")
+    # Two-letter words count. Requiring three let the check reject "We help
+    # adults learn to read.", which is a short but entirely real mission.
+    words = re.findall(r"[A-Za-z]{2,}", cleaned)
+    if len(words) < MIN_MISSION_WORDS:
+        return (f"not enough words ({len(words)}, need {MIN_MISSION_WORDS}); "
+                f"this looks like a placeholder rather than a description")
+    return ""
+
+
 def tags_for(*texts: str) -> list[str]:
     blob = " ".join(t or "" for t in texts).lower()
     return [name for name, pattern in TOPIC_PATTERNS if re.search(pattern, blob)]

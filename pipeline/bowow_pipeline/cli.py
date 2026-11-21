@@ -20,7 +20,7 @@ from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
                       extract_cached, get_extractor)
 from .ingest import run_ingest
 from .match import rank
-from .models import Org, days_until, utcnow
+from .models import Org, days_until, mission_problem, utcnow
 from .evaluate import evaluate, labelling_sheet, load_pairs
 from .registry import get_registry
 from .topics import concepts_for
@@ -55,6 +55,8 @@ def cmd_ingest(args) -> None:
         kwargs["local_path"] = args.local_path
     if args.max_rows is not None:
         kwargs["max_rows"] = args.max_rows
+    if getattr(args, "recipient_type", None):
+        kwargs["recipient_type"] = args.recipient_type
 
     extractor = cache = None
     if args.extract:
@@ -273,8 +275,69 @@ def cmd_check(args) -> None:
           f"for this sample")
 
 
+def _award_index(store, resolved: bool = True) -> dict:
+    """Funder precedent. Grantee profiles when the charity register can be
+    joined, a bare award count otherwise."""
+    if resolved:
+        try:
+            from .precedent import build_profiles, charity_revenue_index
+            from .registry import CraRegistry
+            cra = CraRegistry(REGISTRY_CACHE)
+            if any(cra.cache.glob("cra_financial_*.csv")):
+                revenue = charity_revenue_index(cra)
+                rows = store.conn.execute(
+                    "SELECT funder_name, grantee_ref, amount FROM award")
+                return build_profiles(rows, revenue)
+        except Exception as exc:
+            print(f"  (precedent profiles unavailable: {type(exc).__name__}: {exc})")
+    return {(r["funder_name"] or "").lower(): r["n"] for r in store.conn.execute(
+        "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name")}
+
+
 def cmd_profiles(args) -> None:
     store, _ = _open()
+    if args.action == "mission":
+        target = store.find_org(args.org) if args.org else None
+        if target is None:
+            print(f"no profile matching {args.org!r}")
+            store.close()
+            return
+        text = (args.text or "").strip()
+        if args.file:
+            text = Path(args.file).read_text(encoding="utf-8").strip()
+        if not text:
+            print("pass --text or --file with the organization's own words")
+            store.close()
+            return
+
+        problem = mission_problem(text)
+        if problem:
+            print(f"refusing to set the mission: {problem}")
+            print(f"  got: {text[:60]!r}")
+            store.close()
+            return
+
+        before = target.mission
+        # Replacing a substantial description with a much shorter one is
+        # almost always an accident, and the old text is not recoverable
+        # from anywhere else, since no registry publishes it.
+        if len(before) > 60 and len(text) < len(before) / 2 and not args.force:
+            print(f"refusing to shorten the mission from {len(before)} to "
+                  f"{len(text)} chars without --force")
+            print(f"  current: {before[:70]}...")
+            print(f"  new:     {text[:70]}")
+            store.close()
+            return
+
+        target.mission = text
+        store.upsert_org(target)
+        print(f"{target.name}: mission {len(before)} -> {len(text)} chars")
+        print("  neither public registry publishes mission text, so this is "
+              "the applicant's own description and the strongest topical "
+              "signal the matcher gets")
+        store.close()
+        return
+
     if args.action == "load":
         path = Path(args.file) if args.file else FIXTURE_ORGS
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -362,13 +425,10 @@ def cmd_match(args) -> None:
         store.close()
         return
 
-    # Funder award history, keyed by funder, for the precedent component.
-    award_index = {}
-    for row in store.conn.execute(
-            "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name"):
-        award_index[(row["funder_name"] or "").lower()] = row["n"]
-
-    results = rank(org, opportunities, award_index or None)
+    # Grantee profiles where the charity register resolves, award counts
+    # otherwise. One builder, shared with the eval harness.
+    award_index = _award_index(store) or None
+    results = rank(org, opportunities, award_index)
     eligible = [r for r in results if r.eligible]
 
     rev = f"${org.revenue:,.0f}" if org.revenue is not None else "not on file"
@@ -402,11 +462,6 @@ def cmd_match(args) -> None:
             print(f"      {state} {c.name:12} {c.explanation}")
         print(f"      scored on {r.coverage:.0%} of the intended weighting")
     store.close()
-
-
-def _award_index(store) -> dict:
-    return {(r["funder_name"] or "").lower(): r["n"] for r in store.conn.execute(
-        "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name")}
 
 
 def cmd_eval(args) -> None:
@@ -551,6 +606,8 @@ def main(argv=None) -> None:
     i.add_argument("--limit", type=int, default=25)
     i.add_argument("--keyword", help="grants_gov search keyword")
     i.add_argument("--program-filter", help="canada_gc substring filter")
+    i.add_argument("--recipient-type",
+                   help="canada_gc: keep only this recipient code, e.g. N")
     i.add_argument("--local-path", help="canada_gc: read a local CSV instead")
     i.add_argument("--max-rows", type=int,
                    help="canada_programs: award rows to scan (0 = whole file)")
@@ -584,8 +641,13 @@ def main(argv=None) -> None:
     pr.set_defaults(func=cmd_precedent)
 
     pf = sub.add_parser("profiles", help="load or list applicant profiles")
-    pf.add_argument("action", choices=("load", "list"), nargs="?", default="list")
-    pf.add_argument("--file", help="fixture JSON to load (default: Canadian set)")
+    pf.add_argument("action", choices=("load", "list", "mission"),
+                    nargs="?", default="list")
+    pf.add_argument("--org", help="mission: which profile to update")
+    pf.add_argument("--text", help="mission: the description itself")
+    pf.add_argument("--force", action="store_true",
+                    help="mission: allow replacing a longer description")
+    pf.add_argument("--file", help="fixture JSON to load, or mission text file")
     pf.set_defaults(func=cmd_profiles)
 
     lu = sub.add_parser("lookup", help="fetch a real profile from a registry")

@@ -43,10 +43,16 @@ class CanadaGrantsAdapter(SourceAdapter):
     record_type = "award"
 
     def __init__(self, url: str = CSV_URL, local_path: str | None = None,
-                 program_filter: str | None = None):
+                 program_filter: str | None = None,
+                 recipient_type: str | None = None):
         self.url = url
         self.local_path = local_path      # lets tests and reruns skip the network
         self.program_filter = (program_filter or "").lower()
+        # Published recipient-type code, e.g. "N" for not-for-profits and
+        # charities. Filtering here is what makes the grantee-to-charity-
+        # register join worth doing: the head of this file is agricultural
+        # awards to private companies, which are not in the register at all.
+        self.recipient_type = (recipient_type or "").strip().upper()
 
     def _open_stream(self) -> io.TextIOWrapper:
         if self.local_path:
@@ -81,6 +87,9 @@ class CanadaGrantsAdapter(SourceAdapter):
                 row = self._clean_keys(raw_row)
                 if kept >= limit:
                     break
+                if self.recipient_type and (
+                        row.get("recipient_type") or "").strip().upper() != self.recipient_type:
+                    continue
                 if self.program_filter:
                     haystack = " ".join([
                         row.get("prog_name_en") or "",

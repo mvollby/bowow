@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .models import Opportunity, Org, days_until
+from .precedent import score_applicant
 from .topics import TopicIndex, similarity
 
 # Which corpus region strings a country can apply to. "International" is open
@@ -186,18 +187,25 @@ def _precedent(org: Org, opp: Opportunity, award_index: dict | None) -> Componen
     if not award_index:
         return Component("precedent", w, None,
                          "no award history on file for this funder")
-    count = award_index.get(opp.funder_name.lower())
-    if not count:
+    entry = award_index.get(opp.funder_name.lower())
+    if not entry:
         return Component("precedent", w, None,
                          "no award history on file for this funder")
-    # Volume only. The real precedent signal compares the applicant with this
-    # funder's past grantees, which needs grantee records resolved against a
-    # registry (Phase 5). Saying so beats implying a similarity we have not
-    # computed.
-    score = 0.4 if count < 10 else 0.7 if count < 100 else 1.0
-    return Component("precedent", w, score,
-                     f"{count} awards on record from this funder; grant volume "
-                     f"only, not a comparison with past grantees")
+
+    # A FunderProfile compares the applicant against this funder's actual
+    # grantees. A bare count is the older, weaker form and still appears when
+    # grantee records could not be resolved against the charity register.
+    if isinstance(entry, int):
+        score = 0.4 if entry < 10 else 0.7 if entry < 100 else 1.0
+        return Component("precedent", w, score,
+                         f"{entry} awards on record from this funder; grant "
+                         f"volume only, not a comparison with past grantees")
+
+    score, why = score_applicant(entry, org.revenue)
+    if not entry.usable:
+        # Not enough resolved grantees to say anything. Unknown, not zero.
+        return Component("precedent", w, None, why)
+    return Component("precedent", w, score, why)
 
 
 def _operational(org: Org, opp: Opportunity) -> Component:
