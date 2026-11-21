@@ -51,13 +51,30 @@ Windows set it without putting it in shell history:
 
 Open a new terminal afterwards, then run `check` to confirm.
 
-**Evidence is verified, not trusted.** Every extracted field must come with a
-verbatim quote from the source text, and the quote is checked against that text
-before the field is stored. A claim whose quote cannot be found is discarded
-and reported as a dropped claim. Confidence is the share of asserted fields
-that survived this check, not the model's own estimate of itself. Eligibility
-is precisely the field where a confident wrong answer costs a nonprofit a week
-of work, so the guard is worth its cost.
+**Evidence is verified, not trusted.** Every extracted field must come with
+verbatim quotes from the source text, and each is checked against that text
+before the field is stored. A field citing any span that cannot be found is
+discarded and reported as a dropped claim, with the offending span printed so
+the threshold can be judged from evidence rather than from a count.
+Confidence is the share of asserted fields that survived this check, not the
+model's own estimate of itself. Eligibility is precisely the field where a
+confident wrong answer costs a nonprofit a week of work, so the guard is
+worth its cost.
+
+**List fields cite several spans** (prompt `v2`). A first live run over 69
+records dropped 15 claims, and 12 of them were `applicant_types`. The cause
+was structural rather than a model failure: eligible applicants are usually
+enumerated across bullets, no single contiguous span covers them, the model
+stitched one together, and a correct answer was thrown away as a fabrication.
+`applicant_types_evidence` is now a list. The guarantee is unchanged, because
+every span must still verify and one invented span discards the whole field.
+
+Re-run only the records a grounding change could affect, rather than paying
+again for everything below the threshold:
+
+```bash
+python -m bowow_pipeline extract --requeue-rejected
+```
 
 **Three-state, never boolean.** "No match required" and "the document does not
 say" are different answers, and collapsing them to `False` invents a fact. The

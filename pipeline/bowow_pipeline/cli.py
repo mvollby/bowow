@@ -134,15 +134,27 @@ def cmd_precedent(args) -> None:
 def cmd_extract(args) -> None:
     """Backfill eligibility extraction over opportunities already stored."""
     store, _ = _open()
-    pending = store.needing_extraction(limit=args.limit)
+    extractor = get_extractor(args.backend, args.model)
+    cache_for_scan = ExtractionCache(CACHE_PATH)
+
+    if args.requeue_rejected:
+        # Only the records a grounding change could affect. Everything else
+        # already grounded cleanly and would just be paid for twice.
+        pending = [o for o in store.needing_extraction(threshold=1.01, limit=10000)
+                   if cache_for_scan.was_rejected(o.eligibility_raw, extractor.model)]
+        scope = "records with a previously dropped claim"
+    else:
+        pending = store.needing_extraction(limit=args.limit)
+        scope = "records below the confidence threshold"
+
     if not pending:
-        print("nothing below the confidence threshold; ingest some first")
+        print(f"no {scope}; nothing to do")
         store.close()
         return
+    pending = pending[:args.limit]
 
-    extractor = get_extractor(args.backend, args.model)
     print(f"backend={extractor.backend} model={extractor.model}  "
-          f"candidates={len(pending)}")
+          f"candidates={len(pending)} ({scope})")
 
     if args.dry_run:
         # Show exactly what would be sent, so the prompt and schema can be
@@ -183,6 +195,10 @@ def cmd_extract(args) -> None:
         if result.rejected:
             print(f"  {opp.title[:50]:50} !! unverifiable: "
                   f"{', '.join(result.rejected)}")
+            # Print the offending span so the threshold can be judged from
+            # evidence rather than from a count.
+            for fname, quotes in result.rejected_quotes.items():
+                print(f"      {fname} claimed: \"{str(quotes[0])[:96]}\"")
 
     print(f"\nupdated {stats['changed']}  no-change {stats['none']}  "
           f"cache hits {stats['cached']}  dropped claims {stats['rejected']}")
@@ -354,6 +370,8 @@ def main(argv=None) -> None:
     x.add_argument("--model", default=DEFAULT_MODEL)
     x.add_argument("--dry-run", action="store_true",
                    help="print the request that would be sent, call nothing")
+    x.add_argument("--requeue-rejected", action="store_true",
+                   help="re-run only records whose claims were dropped before")
     x.set_defaults(func=cmd_extract)
 
     s = sub.add_parser("stats", help="corpus summary")

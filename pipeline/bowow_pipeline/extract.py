@@ -32,7 +32,15 @@ from pathlib import Path
 from .models import APPLICANT_TYPES
 
 # Bump when the prompt or schema changes so cached results are not reused.
-PROMPT_VERSION = "v1"
+# v2: list-valued fields cite several evidence spans instead of one. A live
+# run showed 12 of 15 dropped claims were applicant_types, because eligible
+# applicants are usually spelled out across a bulleted list and no single
+# contiguous span covers them. The model composed one quote, it matched
+# nothing, and a correct answer was discarded as a fabrication.
+PROMPT_VERSION = "v2"
+# Earlier versions still present in the cache, newest first. Only needed so a
+# re-run can find records an older version rejected.
+PRIOR_VERSIONS = ("v1",)
 
 DEFAULT_MODEL = "claude-opus-5-5"
 
@@ -46,10 +54,15 @@ application, so a confident wrong answer is worse than an honest "unstated".
 Rules:
 - Answer only from the supplied text. Never use outside knowledge about the \
 program or the funder.
-- Every field has an evidence field. Put a VERBATIM span copied from the \
-supplied text into it. Do not paraphrase, reformat or correct the quote. If \
-there is no supporting span, return "unstated" (or an empty list) and leave \
-the evidence empty.
+- Every field has an evidence field. Put VERBATIM spans copied from the \
+supplied text into it. Do not paraphrase, reformat, join or correct a quote. \
+If there is no supporting span, return "unstated" (or an empty list) and \
+leave the evidence empty.
+- applicant_types_evidence takes a LIST of spans. Eligible applicants are \
+often spread over several bullets or sentences, so quote each one separately \
+rather than stitching them into a single span that does not appear in the \
+text. Every span you provide must appear verbatim; a single invented span \
+discards the whole field.
 - "unstated" means the text does not say. Do not infer "no" from silence.
 - applicant_types: list only the categories the text actually permits. If the \
 text names a narrow group with no clear category, use "Other" and explain in \
@@ -68,7 +81,9 @@ EXTRACTION_SCHEMA = {
             "type": "array",
             "items": {"type": "string", "enum": list(APPLICANT_TYPES)},
         },
-        "applicant_types_evidence": {"type": "string"},
+        # A list, because eligible applicants are usually enumerated across
+        # several bullets and no one contiguous span covers them.
+        "applicant_types_evidence": {"type": "array", "items": {"type": "string"}},
         "match_required": {"type": "string", "enum": list(TRI_STATE)},
         "match_required_evidence": {"type": "string"},
         "partner_required": {"type": "string", "enum": list(TRI_STATE)},
@@ -100,6 +115,10 @@ class Extraction:
     fields: dict = field(default_factory=dict)
     evidence: dict = field(default_factory=dict)
     rejected: list = field(default_factory=list)   # fields whose quote was unverifiable
+    # {field: [spans that did not verify]}. Kept so the threshold can be
+    # judged from evidence later; without it a dropped claim is just a count
+    # and there is no way to tell over-strict matching from a real fabrication.
+    rejected_quotes: dict = field(default_factory=dict)
     confidence: float = 0.0
     backend: str = "none"
     model: str = ""
@@ -124,15 +143,29 @@ def verify_evidence(quote: str, source: str) -> bool:
     return q in s
 
 
+def _as_spans(raw) -> list[str]:
+    """Evidence may be one span or several. Normalize to a list."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    return [str(s).strip() for s in raw if str(s).strip()]
+
+
 def _ground(payload: dict, source: str) -> Extraction:
-    """Keep only the fields whose evidence is verifiable against the source."""
+    """Keep only the fields whose evidence is verifiable against the source.
+
+    Every span a field cites must appear in the source. Allowing several
+    spans fixes list-valued fields without weakening the guarantee: one
+    invented span still discards the whole field.
+    """
     out = Extraction(backend="pending")
     checked = 0
     kept = 0
 
     for name, ev_key in _EVIDENCE_OF.items():
         value = payload.get(name)
-        quote = (payload.get(ev_key) or "").strip()
+        spans = _as_spans(payload.get(ev_key))
 
         unstated = value in ("unstated", "", None) or value == []
         if unstated:
@@ -140,13 +173,16 @@ def _ground(payload: dict, source: str) -> Extraction:
             continue
 
         checked += 1
-        if verify_evidence(quote, source):
+        bad = [s for s in spans if not verify_evidence(s, source)]
+        if spans and not bad:
             out.fields[name] = value
-            out.evidence[name] = quote
+            out.evidence[name] = spans if len(spans) > 1 else spans[0]
             kept += 1
         else:
-            # Claimed a fact it could not point to. Drop the claim, keep the note.
+            # Claimed a fact it could not point to. Drop the claim, keep the
+            # offending spans so the threshold can be reviewed against them.
             out.rejected.append(name)
+            out.rejected_quotes[name] = bad or ["(no evidence supplied)"]
             out.fields[name] = None if name != "applicant_types" else []
 
     out.fields["notes"] = (payload.get("notes") or "").strip()
@@ -161,9 +197,33 @@ class ExtractionCache:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
+    def rejected_keys(self) -> set[str]:
+        """Cache file stems whose run dropped at least one claim."""
+        hits = set()
+        for path in self.root.glob("*.json"):
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if entry.get("rejected"):
+                hits.add(path.stem)
+        return hits
+
+    def was_rejected(self, text: str, model: str) -> bool:
+        """True if this text dropped a claim under the current or a prior run.
+
+        Lets a grounding change be re-run against exactly the records it
+        could affect, rather than everything below the confidence threshold.
+        Older entries are keyed by their own prompt version, so each known
+        version is checked.
+        """
+        stems = self.rejected_keys()
+        return any(self.key(text, model, version) in stems
+                   for version in (PROMPT_VERSION, *PRIOR_VERSIONS))
+
     @staticmethod
-    def key(text: str, model: str) -> str:
-        blob = f"{PROMPT_VERSION}|{model}|{text}".encode("utf-8")
+    def key(text: str, model: str, version: str = PROMPT_VERSION) -> str:
+        blob = f"{version}|{model}|{text}".encode("utf-8")
         return hashlib.sha256(blob).hexdigest()
 
     def get(self, key: str) -> dict | None:
@@ -340,7 +400,8 @@ def extract_cached(text: str, extractor, cache: ExtractionCache | None) -> Extra
     result = extractor.extract(text)
     cache.put(key, {
         "fields": result.fields, "evidence": result.evidence,
-        "rejected": result.rejected, "confidence": result.confidence,
+        "rejected": result.rejected, "rejected_quotes": result.rejected_quotes,
+        "confidence": result.confidence,
         "backend": result.backend, "model": result.model, "usage": result.usage,
     })
     return result
@@ -371,7 +432,10 @@ def apply_extraction(opp, result: Extraction) -> list[str]:
             changed.append(name)
 
     for name in changed:
-        quote = result.evidence.get(name) or result.evidence.get("applicant_types", "")
+        raw = result.evidence.get(name) or result.evidence.get("applicant_types", "")
+        # Evidence may now be several spans; join them for the citation shown
+        # in the UI, keeping each span distinguishable.
+        quote = " / ".join(raw) if isinstance(raw, list) else raw
         opp.field_provenance[name] = {
             "url": opp.source_url,
             "snippet": quote[:300],
