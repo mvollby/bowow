@@ -1,0 +1,7 @@
+# The pipeline core runs on the standard library alone.
+# Install this only to enable the Claude eligibility extraction backend;
+# without it the pipeline falls back to the deterministic rule extractor.
+anthropic>=2.0.0   # tested against 2.12.0
+
+# Tests
+pytest>=8.0.0
