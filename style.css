@@ -111,3 +111,14 @@ dialog form{display:flex;justify-content:flex-end;margin-top:15px}
 .provider-mark img{width:20px;height:20px;object-fit:contain}
 .grant-misses{color:#e0b685;font-size:12px}
 .grant-misses strong{margin-right:4px}
+
+/* Unknown eligibility is its own state, visually distinct from a miss.
+   A missed filter is amber because the grant is wrong for the user; an
+   unverifiable one is blue-grey because the gap is in our data, not in
+   their fit, and the two call for different actions. */
+.grant-unknown{color:#9fb4d8;font-size:12px}
+.grant-unknown strong{margin-right:4px}
+.score-ring.unsure-fit{--score-color:#9fb4d8}
+.grant-flags{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0}
+.flag{font-size:11px;color:var(--muted);border:1px solid #2f3f5f;border-radius:999px;padding:2px 8px}
+.flag.warn{color:#e0b685;border-color:#54452f}
