@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import asdict
 from pathlib import Path
 
-from .models import Award, Opportunity, utcnow
+from .models import Award, Opportunity, Org, utcnow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS opportunity (
@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS award (
 );
 CREATE INDEX IF NOT EXISTS idx_award_funder ON award(funder_name);
 CREATE INDEX IF NOT EXISTS idx_award_ref ON award(grantee_ref);
+
+CREATE TABLE IF NOT EXISTS org (
+  org_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL, country TEXT, region TEXT,
+  applicant_type TEXT, registry_id TEXT, status TEXT,
+  revenue REAL, program_expense REAL,
+  categories TEXT, mission TEXT, beneficiaries TEXT,
+  synthetic INTEGER DEFAULT 0,
+  first_seen TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS ingest_run (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +215,55 @@ class Store:
              award.source_url, award.fingerprint(), utcnow()))
         self.conn.commit()
         return "inserted"
+
+    def upsert_org(self, org: Org) -> str:
+        existing = self.conn.execute(
+            "SELECT 1 FROM org WHERE org_id = ?", (org.org_id,)).fetchone()
+        values = (org.org_id, org.name, org.country, org.region,
+                  org.applicant_type, org.registry_id, org.status,
+                  org.revenue, org.program_expense,
+                  json.dumps(org.categories), org.mission, org.beneficiaries,
+                  int(org.synthetic))
+        if existing:
+            self.conn.execute(
+                "UPDATE org SET name=?, country=?, region=?, applicant_type=?, "
+                "registry_id=?, status=?, revenue=?, program_expense=?, "
+                "categories=?, mission=?, beneficiaries=?, synthetic=? "
+                "WHERE org_id=?", (*values[1:], org.org_id))
+            self.conn.commit()
+            return "updated"
+        self.conn.execute(
+            "INSERT INTO org (org_id, name, country, region, applicant_type, "
+            "registry_id, status, revenue, program_expense, categories, mission, "
+            "beneficiaries, synthetic, first_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*values, utcnow()))
+        self.conn.commit()
+        return "inserted"
+
+    @staticmethod
+    def decode_org(row: sqlite3.Row) -> Org:
+        return Org(
+            org_id=row["org_id"], name=row["name"], country=row["country"],
+            region=row["region"], applicant_type=row["applicant_type"],
+            registry_id=row["registry_id"] or "", status=row["status"] or "",
+            revenue=row["revenue"], program_expense=row["program_expense"],
+            categories=json.loads(row["categories"] or "[]"),
+            mission=row["mission"] or "", beneficiaries=row["beneficiaries"] or "",
+            synthetic=bool(row["synthetic"]))
+
+    def orgs(self) -> list[Org]:
+        return [self.decode_org(r) for r in
+                self.conn.execute("SELECT * FROM org ORDER BY name")]
+
+    def find_org(self, needle: str) -> Org | None:
+        row = self.conn.execute(
+            "SELECT * FROM org WHERE org_id = ? OR name LIKE ? ORDER BY name LIMIT 1",
+            (needle, f"%{needle}%")).fetchone()
+        return self.decode_org(row) if row else None
+
+    def all_opportunities(self) -> list[Opportunity]:
+        return [self.decode(r) for r in
+                self.conn.execute("SELECT * FROM opportunity")]
 
     def start_run(self, source: str) -> int:
         cur = self.conn.execute(

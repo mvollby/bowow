@@ -132,7 +132,12 @@ class CanadaGrantsAdapter(SourceAdapter):
             # alone drops revisions, and a revision can change the dollar value.
             native_id=f"{ref}#{amendment}",
             amendment=amendment,
-            funder_name=(raw.get("owner_org_title") or "Government of Canada").strip(),
+            # owner_org_title is bilingual, "English | French". Keep the
+            # English half only, so award rows and the program catalogue
+            # derived from them key on the same funder name and the
+            # precedent lookup actually joins.
+            funder_name=((raw.get("owner_org_title") or "Government of Canada")
+                         .split("|")[0].strip()),
             grantee_name=grantee,
             grantee_ref=(raw.get("recipient_business_number") or "").strip(),
             amount=amount,

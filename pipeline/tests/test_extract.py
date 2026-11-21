@@ -51,9 +51,10 @@ def _stub_client(payload: dict, stop_reason: str = "end_turn",
 
 GOOD_PAYLOAD = {
     "applicant_types": ["Nonprofit", "Higher education"],
-    "applicant_types_evidence":
-        "Proposals may only be submitted by nonprofit organizations with "
-        "501(c)(3) status and accredited institutions of higher education.",
+    "applicant_types_evidence": [
+        "submitted by nonprofit organizations with 501(c)(3) status",
+        "accredited institutions of higher education",
+    ],
     "match_required": "yes",
     "match_required_evidence": "Cost sharing is required for all awards.",
     "partner_required": "no",
@@ -130,6 +131,85 @@ def test_refusal_is_handled_without_raising():
     out = ex.extract(SOURCE)
     assert out.confidence == 0.0
     assert "declined" in out.fields["notes"]
+
+
+def test_list_field_may_cite_several_spans():
+    """The fix for the live run: 12 of 15 dropped claims were applicant_types,
+    because eligible applicants are enumerated across bullets and no single
+    contiguous span covers them."""
+    source = ("Eligible applicants:\n"
+              "- nonprofit organizations with 501(c)(3) status\n"
+              "- accredited institutions of higher education\n"
+              "Cost sharing is required for all awards.")
+    payload = dict(GOOD_PAYLOAD)
+    payload["applicant_types_evidence"] = [
+        "nonprofit organizations with 501(c)(3) status",
+        "accredited institutions of higher education",
+    ]
+    payload["match_required_evidence"] = "Cost sharing is required for all awards."
+    payload["partner_required"] = "unstated"
+    payload["partner_required_evidence"] = ""
+
+    ex = ClaudeExtractor()
+    ex._client = _stub_client(payload)
+    out = ex.extract(source)
+
+    assert out.fields["applicant_types"] == ["Nonprofit", "Higher education"]
+    assert out.rejected == []
+
+
+def test_one_invented_span_still_discards_the_whole_field():
+    """Allowing several spans must not weaken the no-fabrication guarantee."""
+    payload = dict(GOOD_PAYLOAD)
+    payload["applicant_types_evidence"] = [
+        "submitted by nonprofit organizations with 501(c)(3) status",
+        "and by municipal governments of any size",        # not in SOURCE
+    ]
+    ex = ClaudeExtractor()
+    ex._client = _stub_client(payload)
+    out = ex.extract(SOURCE)
+
+    assert "applicant_types" in out.rejected
+    assert out.fields["applicant_types"] == []
+
+
+def test_rejected_quotes_are_kept_for_review():
+    """A dropped claim has to be inspectable, or the threshold cannot be judged."""
+    bad = dict(GOOD_PAYLOAD)
+    bad["match_required_evidence"] = "A 25 percent match of total project cost is mandatory."
+    ex = ClaudeExtractor()
+    ex._client = _stub_client(bad)
+    out = ex.extract(SOURCE)
+
+    assert out.rejected_quotes["match_required"] == [
+        "A 25 percent match of total project cost is mandatory."]
+
+
+def test_missing_evidence_is_rejected_not_accepted():
+    payload = dict(GOOD_PAYLOAD)
+    payload["match_required_evidence"] = ""
+    ex = ClaudeExtractor()
+    ex._client = _stub_client(payload)
+    out = ex.extract(SOURCE)
+    assert "match_required" in out.rejected
+    assert out.rejected_quotes["match_required"] == ["(no evidence supplied)"]
+
+
+def test_schema_declares_evidence_list_for_applicant_types():
+    schema = ClaudeExtractor().build_request(SOURCE)["output_config"]["format"]["schema"]
+    assert schema["properties"]["applicant_types_evidence"]["type"] == "array"
+    assert schema["properties"]["match_required_evidence"]["type"] == "string"
+
+
+def test_requeue_finds_only_previously_rejected_texts(tmp_path):
+    cache = ExtractionCache(tmp_path)
+    ex = ClaudeExtractor()
+    ex._client = _stub_client({**GOOD_PAYLOAD,
+                               "match_required_evidence": "an invented sentence entirely"})
+    extract_cached(SOURCE, ex, cache)
+
+    assert cache.was_rejected(SOURCE, ex.model) is True
+    assert cache.was_rejected("some other eligibility text", ex.model) is False
 
 
 def test_request_uses_strict_schema_and_system_prompt():

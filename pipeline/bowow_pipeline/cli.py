@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import re
 from pathlib import Path
@@ -18,7 +19,11 @@ from .adapters import adapter_names
 from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
                       extract_cached, get_extractor)
 from .ingest import run_ingest
-from .models import days_until, utcnow
+from .match import rank
+from .models import Org, days_until, utcnow
+from .evaluate import evaluate, labelling_sheet, load_pairs
+from .registry import get_registry
+from .topics import concepts_for
 from .rawstore import RawStore
 from .store import Store
 
@@ -26,6 +31,10 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA / "bowow.db"
 RAW_PATH = DATA / "raw"
 CACHE_PATH = DATA / "extraction_cache"
+FIXTURE_ORGS = Path(__file__).resolve().parent.parent / "fixtures" / "orgs_ca.json"
+REGISTRY_CACHE = DATA / "registry"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
+EVAL_PAIRS = EVAL_DIR / "pairs.jsonl"
 # The static site lives one level up from the pipeline package.
 SITE_ROOT = Path(__file__).resolve().parent.parent.parent
 WEB_DATA = SITE_ROOT / "data" / "opportunities.json"
@@ -44,6 +53,8 @@ def cmd_ingest(args) -> None:
         kwargs["program_filter"] = args.program_filter
     if args.local_path:
         kwargs["local_path"] = args.local_path
+    if args.max_rows is not None:
+        kwargs["max_rows"] = args.max_rows
 
     extractor = cache = None
     if args.extract:
@@ -134,15 +145,27 @@ def cmd_precedent(args) -> None:
 def cmd_extract(args) -> None:
     """Backfill eligibility extraction over opportunities already stored."""
     store, _ = _open()
-    pending = store.needing_extraction(limit=args.limit)
+    extractor = get_extractor(args.backend, args.model)
+    cache_for_scan = ExtractionCache(CACHE_PATH)
+
+    if args.requeue_rejected:
+        # Only the records a grounding change could affect. Everything else
+        # already grounded cleanly and would just be paid for twice.
+        pending = [o for o in store.needing_extraction(threshold=1.01, limit=10000)
+                   if cache_for_scan.was_rejected(o.eligibility_raw, extractor.model)]
+        scope = "records with a previously dropped claim"
+    else:
+        pending = store.needing_extraction(limit=args.limit)
+        scope = "records below the confidence threshold"
+
     if not pending:
-        print("nothing below the confidence threshold; ingest some first")
+        print(f"no {scope}; nothing to do")
         store.close()
         return
+    pending = pending[:args.limit]
 
-    extractor = get_extractor(args.backend, args.model)
     print(f"backend={extractor.backend} model={extractor.model}  "
-          f"candidates={len(pending)}")
+          f"candidates={len(pending)} ({scope})")
 
     if args.dry_run:
         # Show exactly what would be sent, so the prompt and schema can be
@@ -183,6 +206,10 @@ def cmd_extract(args) -> None:
         if result.rejected:
             print(f"  {opp.title[:50]:50} !! unverifiable: "
                   f"{', '.join(result.rejected)}")
+            # Print the offending span so the threshold can be judged from
+            # evidence rather than from a count.
+            for fname, quotes in result.rejected_quotes.items():
+                print(f"      {fname} claimed: \"{str(quotes[0])[:96]}\"")
 
     print(f"\nupdated {stats['changed']}  no-change {stats['none']}  "
           f"cache hits {stats['cached']}  dropped claims {stats['rejected']}")
@@ -246,22 +273,206 @@ def cmd_check(args) -> None:
           f"for this sample")
 
 
-# Same topic vocabulary the search form uses, so a program summary typed on
-# the front page can be compared against grants on equal terms. Kept here, in
-# one place, rather than duplicated in JavaScript.
-TOPIC_PATTERNS = (
-    ("student aid", r"bursar|scholarship|tuition|financial aid|student aid"),
-    ("rural access", r"\brural\b|\bremote\b"),
-    ("learning support", r"tutor|mentor|literacy|learning"),
-    ("partnerships", r"partner|collaborat|consortium"),
-    ("research", r"research|fieldwork"),
-    ("operating costs", r"operating|capacity|overhead"),
-)
+def cmd_profiles(args) -> None:
+    store, _ = _open()
+    if args.action == "load":
+        path = Path(args.file) if args.file else FIXTURE_ORGS
+        data = json.loads(path.read_text(encoding="utf-8"))
+        counts = {"inserted": 0, "updated": 0}
+        for record in data["orgs"]:
+            record.pop("_comment", None)
+            org = Org(**record)
+            # Fixture rows are synthetic whatever the file claims. Nothing
+            # loaded from a fixture may present itself as a registry record.
+            org.synthetic = True
+            counts[store.upsert_org(org)] += 1
+        print(f"loaded {path.name}: {counts['inserted']} new, "
+              f"{counts['updated']} updated (all marked synthetic)")
+
+    orgs = store.orgs()
+    print(f"\n{len(orgs)} profiles on file")
+    for org in orgs:
+        rev = f"${org.revenue:,.0f}" if org.revenue is not None else "no filing"
+        tag = " [synthetic]" if org.synthetic else ""
+        print(f"  {org.org_id:24} {org.country} {org.region[:12]:12} "
+              f"{org.applicant_type[:16]:16} {rev:>12}  {org.name[:32]}{tag}")
+    store.close()
 
 
-def _tags_for(*texts: str) -> list[str]:
-    blob = " ".join(t or "" for t in texts).lower()
-    return [name for name, pattern in TOPIC_PATTERNS if re.search(pattern, blob)]
+def cmd_lookup(args) -> None:
+    """Pull a real profile from a public charity registry."""
+    store, _ = _open()
+    registry = get_registry(args.country, REGISTRY_CACHE)
+
+    if args.search:
+        hits = registry.search(args.search)
+        if not hits:
+            print(f"no {args.country.upper()} registry match for {args.search!r}")
+            store.close()
+            return
+        print(f"{len(hits)} candidates (look up the one you want by id):")
+        for h in hits:
+            if args.country.upper() == "US":
+                print(f"  {h.get('strein','?'):12} {str(h.get('name'))[:46]:46} "
+                      f"{h.get('city','')}, {h.get('state','')}")
+            else:
+                print(f"  {h.get('BN','?'):16} {str(h.get('Legal Name'))[:44]:44} "
+                      f"{h.get('City','')}, {h.get('Province','')}")
+        store.close()
+        return
+
+    org = registry.fetch(args.id)
+    if org is None:
+        print(f"no {args.country.upper()} registry record for {args.id!r}")
+        store.close()
+        return
+
+    rev = f"${org.revenue:,.0f}" if org.revenue is not None else "not filed"
+    prog = (f"${org.program_expense:,.0f}" if org.program_expense is not None
+            else "not published by this registry")
+    print(f"{org.name}")
+    print(f"  {org.applicant_type}, {org.region}, {org.country}")
+    print(f"  registry id    {org.registry_id}")
+    print(f"  status         {org.status}")
+    print(f"  revenue        {rev}")
+    print(f"  programme cost {prog}")
+    print(f"  categories     {', '.join(org.categories) or '(none)'}")
+
+    if args.save:
+        print(f"\nsaved: {store.upsert_org(org)} as {org.org_id}")
+        if not org.mission:
+            print("  note: this registry publishes no mission text, so topical "
+                  "matching will be weak until a mission is added")
+    else:
+        print("\n(pass --save to store this profile)")
+    store.close()
+
+
+def cmd_match(args) -> None:
+    store, _ = _open()
+    org = store.find_org(args.org)
+    if org is None:
+        print(f"no profile matching {args.org!r}; try: profiles list")
+        store.close()
+        return
+
+    opportunities = store.all_opportunities()
+    if not opportunities:
+        print("the corpus is empty; run ingest first")
+        store.close()
+        return
+
+    # Funder award history, keyed by funder, for the precedent component.
+    award_index = {}
+    for row in store.conn.execute(
+            "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name"):
+        award_index[(row["funder_name"] or "").lower()] = row["n"]
+
+    results = rank(org, opportunities, award_index or None)
+    eligible = [r for r in results if r.eligible]
+
+    rev = f"${org.revenue:,.0f}" if org.revenue is not None else "not on file"
+    print(f"{org.name}{' [synthetic]' if org.synthetic else ''}")
+    print(f"  {org.applicant_type}, {org.region}, {org.country} | revenue {rev}")
+    print(f"\nscreened {len(results)} opportunities: "
+          f"{len(eligible)} pass every hard gate, "
+          f"{len(results) - len(eligible)} fail at least one")
+
+    reasons = collections.Counter(
+        name for r in results for name, _ in r.failed)
+    if reasons:
+        print("gate failures by cause:")
+        for name, n in reasons.most_common():
+            print(f"  {name:16} {n}")
+
+    shown = (eligible or results)[:args.limit]
+    header = "top matches" if eligible else "nothing passes; closest below"
+    print(f"\n{header}")
+    for r in shown:
+        o = r.opportunity
+        cap = f"up to ${o.amount_max:,}" if o.amount_max else "amount unstated"
+        print(f"\n  {r.rating}/10  {o.title[:58]}")
+        print(f"      {o.funder_name[:50]} | {cap} | {o.deadline or 'no deadline'}")
+        for name, why in r.failed:
+            print(f"      BLOCKED {name}: {why}")
+        for name, why in r.unknown:
+            print(f"      unknown {name}: {why}")
+        for c in r.components:
+            state = f"{c.score:.2f}" if c.known else " -- "
+            print(f"      {state} {c.name:12} {c.explanation}")
+        print(f"      scored on {r.coverage:.0%} of the intended weighting")
+    store.close()
+
+
+def _award_index(store) -> dict:
+    return {(r["funder_name"] or "").lower(): r["n"] for r in store.conn.execute(
+        "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name")}
+
+
+def cmd_eval(args) -> None:
+    store, _ = _open()
+    opportunities = store.all_opportunities()
+    orgs = {o.org_id: o for o in store.orgs()}
+    idx = _award_index(store) or None
+
+    if args.action == "sheet":
+        org = store.find_org(args.org) if args.org else None
+        targets = [org] if org else list(orgs.values())
+        if args.org and org is None:
+            print(f"no profile matching {args.org!r}")
+            store.close()
+            return
+        rows = []
+        for target in targets:
+            rows += labelling_sheet(target, opportunities, idx,
+                                    top=args.top, sample=args.sample)
+        EVAL_DIR.mkdir(parents=True, exist_ok=True)
+        out = Path(args.out) if args.out else EVAL_DIR / "to_label.csv"
+        import csv as _csv
+        with open(out, "w", newline="", encoding="utf-8") as fh:
+            writer = _csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"wrote {len(rows)} rows to label -> {out}")
+        print("fill in label (yes/maybe/no/ineligible) and labeler, then")
+        print("append the completed rows to eval/pairs.jsonl")
+        store.close()
+        return
+
+    path = Path(args.pairs) if args.pairs else EVAL_PAIRS
+    if not path.exists():
+        print(f"no label file at {path}; run: eval sheet")
+        store.close()
+        return
+    pairs = load_pairs(path)
+    report = evaluate(pairs, orgs, opportunities, idx)
+
+    print(f"labelled pairs {report.pairs_total}  scored {report.pairs_scored}  "
+          f"organizations {report.org_count}")
+    for who, n in sorted(report.by_labeler.items()):
+        print(f"  {who:16} {n}")
+    if report.missing:
+        print(f"  skipped {len(report.missing)} pairs not present in this corpus")
+        for item in report.missing[:3]:
+            print(f"     {item}")
+
+    print()
+    for k in sorted(report.precision_at):
+        print(f"  precision@{k:<3} {report.precision_at[k]:.2f}   "
+              f"recall@{k:<3} {report.recall_at[k]:.2f}   "
+              f"(labelled coverage of top {k}: {report.coverage_at[k]:.0%})")
+    print(f"  MRR         {report.mrr:.2f}")
+
+    print(f"\n  gate false accepts {len(report.false_accepts)}  "
+          f"false rejects {len(report.false_rejects)}")
+    for org_id, uid, reason in report.false_rejects[:3]:
+        print(f"     rejected on {reason}: {org_id} -> {uid[:52]}")
+
+    if not report.headline_is_trustworthy:
+        print(f"\n  NOTE: only {report.expert_pairs} pairs carry a practitioner "
+              f"label. These figures are a regression tripwire, not a measure "
+              f"of match quality. Label 50+ pairs before quoting them.")
+    store.close()
 
 
 def cmd_export(args) -> None:
@@ -298,7 +509,8 @@ def cmd_export(args) -> None:
             "applicant": json.loads(r["applicant_types"] or "[]"),
             "regions": json.loads(r["regions"] or "[]"),
             "purposes": purposes,
-            "tags": _tags_for(r["title"], r["summary"], " ".join(purposes)),
+            "tags": sorted(concepts_for(r["title"], r["summary"],
+                                        " ".join(purposes))),
             "low": r["amount_min"], "high": r["amount_max"],
             "currency": r["currency"], "deadline": r["deadline"],
             "route": r["route"],
@@ -340,6 +552,8 @@ def main(argv=None) -> None:
     i.add_argument("--keyword", help="grants_gov search keyword")
     i.add_argument("--program-filter", help="canada_gc substring filter")
     i.add_argument("--local-path", help="canada_gc: read a local CSV instead")
+    i.add_argument("--max-rows", type=int,
+                   help="canada_programs: award rows to scan (0 = whole file)")
     i.add_argument("--extract", action="store_true",
                    help="run eligibility extraction on low-confidence records")
     i.add_argument("--backend", choices=("auto", "claude", "rules"),
@@ -354,6 +568,8 @@ def main(argv=None) -> None:
     x.add_argument("--model", default=DEFAULT_MODEL)
     x.add_argument("--dry-run", action="store_true",
                    help="print the request that would be sent, call nothing")
+    x.add_argument("--requeue-rejected", action="store_true",
+                   help="re-run only records whose claims were dropped before")
     x.set_defaults(func=cmd_extract)
 
     s = sub.add_parser("stats", help="corpus summary")
@@ -366,6 +582,32 @@ def main(argv=None) -> None:
     pr = sub.add_parser("precedent", help="funder history for a grantee")
     pr.add_argument("grantee")
     pr.set_defaults(func=cmd_precedent)
+
+    pf = sub.add_parser("profiles", help="load or list applicant profiles")
+    pf.add_argument("action", choices=("load", "list"), nargs="?", default="list")
+    pf.add_argument("--file", help="fixture JSON to load (default: Canadian set)")
+    pf.set_defaults(func=cmd_profiles)
+
+    lu = sub.add_parser("lookup", help="fetch a real profile from a registry")
+    lu.add_argument("--country", choices=("US", "CA", "us", "ca"), required=True)
+    lu.add_argument("--id", help="EIN (US) or Business Number (CA)")
+    lu.add_argument("--search", help="search the registry by name instead")
+    lu.add_argument("--save", action="store_true", help="store the profile")
+    lu.set_defaults(func=cmd_lookup)
+
+    m = sub.add_parser("match", help="score one organization against the corpus")
+    m.add_argument("org", help="org_id or part of the name")
+    m.add_argument("--limit", type=int, default=3)
+    m.set_defaults(func=cmd_match)
+
+    ev = sub.add_parser("eval", help="measure match quality against labels")
+    ev.add_argument("action", choices=("run", "sheet"), nargs="?", default="run")
+    ev.add_argument("--org", help="sheet: limit to one organization")
+    ev.add_argument("--pairs", help="run: label file (default eval/pairs.jsonl)")
+    ev.add_argument("--out", help="sheet: output csv path")
+    ev.add_argument("--top", type=int, default=10)
+    ev.add_argument("--sample", type=int, default=5)
+    ev.set_defaults(func=cmd_eval)
 
     ck = sub.add_parser("check", help="verify extraction credentials and setup")
     ck.add_argument("--live", action="store_true",

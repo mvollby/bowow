@@ -7,10 +7,13 @@ SDK is optional and only needed for Claude-backed eligibility extraction.
 
 ```bash
 cd pipeline
-python -m bowow_pipeline ingest grants_gov --limit 20 --keyword education
-python -m bowow_pipeline ingest canada_gc  --limit 150
+python -m bowow_pipeline ingest grants_gov     --limit 20 --keyword education
+python -m bowow_pipeline ingest canada_gc      --limit 4000     # award history
+python -m bowow_pipeline ingest canada_programs --limit 600 --max-rows 0
 python -m bowow_pipeline stats
 python -m bowow_pipeline changes
+python -m bowow_pipeline profiles load         # synthetic test organizations
+python -m bowow_pipeline match ca-literacy-mid
 python -m bowow_pipeline precedent "Carleton"
 python -m bowow_pipeline export
 python -m pytest tests/ -q
@@ -51,13 +54,30 @@ Windows set it without putting it in shell history:
 
 Open a new terminal afterwards, then run `check` to confirm.
 
-**Evidence is verified, not trusted.** Every extracted field must come with a
-verbatim quote from the source text, and the quote is checked against that text
-before the field is stored. A claim whose quote cannot be found is discarded
-and reported as a dropped claim. Confidence is the share of asserted fields
-that survived this check, not the model's own estimate of itself. Eligibility
-is precisely the field where a confident wrong answer costs a nonprofit a week
-of work, so the guard is worth its cost.
+**Evidence is verified, not trusted.** Every extracted field must come with
+verbatim quotes from the source text, and each is checked against that text
+before the field is stored. A field citing any span that cannot be found is
+discarded and reported as a dropped claim, with the offending span printed so
+the threshold can be judged from evidence rather than from a count.
+Confidence is the share of asserted fields that survived this check, not the
+model's own estimate of itself. Eligibility is precisely the field where a
+confident wrong answer costs a nonprofit a week of work, so the guard is
+worth its cost.
+
+**List fields cite several spans** (prompt `v2`). A first live run over 69
+records dropped 15 claims, and 12 of them were `applicant_types`. The cause
+was structural rather than a model failure: eligible applicants are usually
+enumerated across bullets, no single contiguous span covers them, the model
+stitched one together, and a correct answer was thrown away as a fabrication.
+`applicant_types_evidence` is now a list. The guarantee is unchanged, because
+every span must still verify and one invented span discards the whole field.
+
+Re-run only the records a grounding change could affect, rather than paying
+again for everything below the threshold:
+
+```bash
+python -m bowow_pipeline extract --requeue-rejected
+```
 
 **Three-state, never boolean.** "No match required" and "the document does not
 say" are different answers, and collapsing them to `False` invents a fact. The
@@ -129,6 +149,144 @@ verified 5.5 sorted above an unverified 5.7, which looks broken even though
 the order was right. The score measures filter match only. It is not a
 judgement of the grant, and extraction confidence sits beside it as a badge
 rather than being blended in.
+
+## Canadian programmes
+
+Canada publishes no equivalent of the Grants.gov opportunity API. It does
+publish every grant already made, and each row names the programme that funded
+it, so `canada_programs` aggregates award history into a catalogue of real
+programmes with real departments and real award sizes.
+
+Two distinctions have to survive into the UI, and tests hold them there:
+
+- **These are not open calls.** No deadline, and `route` says "Program (no
+  posted call)". They land in the "could not verify" band rather than being
+  presented as something to apply to this week.
+- **Applicant types record who has been funded, not who is eligible.** A
+  programme open to nonprofits that only universities have applied to will
+  show Academia. The provenance says exactly that.
+
+Recipient type codes come from the publisher's schema, not inference: `S` is
+Academia (not School) and `P` is Individual (not Private).
+
+Award ranges follow the sample size, because percentiles only exclude outliers
+when there is a tail: percentiles at 10 or more awards, a trimmed range at 5
+to 9, and below that the figure is published with a note that it is not
+typical.
+
+The published CSV is ordered by department, so a capped scan is a biased
+sample. A 200,000-row scan returned 6 departments and no education ministry;
+the full 1.38M-row pass returns 46. Use `--max-rows 0` for the real thing, at
+about 2.5 GB of download.
+
+## Registry lookups
+
+Real applicant profiles from the two public registries, replacing the
+fixtures:
+
+```bash
+python -m bowow_pipeline lookup --country US --search "reading partners"
+python -m bowow_pipeline lookup --country US --id 77-0568469 --save
+python -m bowow_pipeline lookup --country CA --search literacy
+python -m bowow_pipeline lookup --country CA --id 107782609RR0001 --save
+```
+
+US uses the ProPublica Nonprofit Explorer API, live and keyless. Canada uses
+the CRA List of Charities, about 33 MB of CSV cached on first use. CRA
+resource ids change with every annual release, so the current dataset is
+discovered through CKAN and chosen by the year in its title, not by
+modification date, because old releases get re-touched.
+
+Two findings worth carrying forward:
+
+**The two countries are not symmetric.** The CRA financial file has a real
+charitable-programme expenditure line, so Canadian profiles carry both revenue
+and programme cost. ProPublica exposes `totrevenue` and `totfuncexpns` but no
+programme-service line; `totfuncexpns` is TOTAL functional expenses, so US
+profiles carry revenue and leave programme cost unset rather than relabelling
+a different number as that one.
+
+T3010 line numbers were verified against the live file, not read off the form:
+`4700` total revenue, `4950` total expenditures, `5000` expenditure on
+charitable programmes.
+
+**Neither registry publishes mission text.** That matters because topical fit
+is the largest-weighted component, and a registry profile arrives with none.
+The organization's legal name is therefore part of its topical text, since
+charity names are usually descriptive. A real lookup of Literacy North Halton
+matched a dairy investment programme on budget alone until the name was
+included; with it, the top match is the Adult Learning, Literacy and Essential
+Skills Programme at 0.83. A mission typed by the applicant would be better
+still, and is the obvious next input.
+
+## Matching
+
+`match` scores one organization against the corpus in two stages.
+
+**Hard gates** (geography, applicant type, deadline) are binary and auditable.
+A gate the data cannot answer is recorded as unknown, never silently passed.
+
+**Weighted components** each carry a plain-English explanation. The rule that
+matters: a component that cannot be computed is dropped and the remaining
+weights renormalize. It is never scored as zero, because treating "no funder
+history on file" as "this funder has never funded anyone like you" would be a
+fabrication dressed as arithmetic. `coverage` reports how much of the intended
+weighting was actually available, and headroom inside a band scales with it,
+so a grant we know little about cannot read as a near-perfect match.
+
+Topical relevance is not just one component among five. Below a floor, a grant
+is marked off-topic and ranked beneath everything relevant. Weighting alone
+could not express this: four generic components scoring 1.00 outvoted one
+relevant component scoring 0.00, and a dairy farm investment fund outranked a
+literacy programme for a literacy charity.
+
+`topics.py` does the topical work: phrase-based concepts plus TF-IDF cosine
+weighted over the whole corpus. This is lexical similarity, not embeddings; it
+does not know "bursary" and "scholarship" are the same idea unless the lexicon
+says so, which is why the lexicon exists. The interface is the one an
+embedding backend would implement.
+
+Test profiles in `fixtures/orgs_ca.json` are synthetic: invented names,
+deliberately invalid business numbers, `synthetic: true` on every row, and the
+loader overrides that flag regardless of what the file claims.
+
+## Evaluation
+
+```bash
+python -m bowow_pipeline eval sheet --org ca-literacy-mid   # rows to label
+python -m bowow_pipeline eval run                           # measure
+```
+
+Labels live in `eval/pairs.jsonl`, one JSON object per line, graded
+`yes` / `maybe` / `no` / `ineligible`. Reported metrics are precision and
+recall at 5 and 10, MRR, and gate accuracy split into false accepts and false
+rejects, because a gate that wrongly rejects is a different failure from a
+score that ranks badly.
+
+Three decisions worth keeping:
+
+**Provenance travels with every label.** `labeler` is the most important field
+in the file. Pairs marked `seed` were labelled during development because the
+answer is not arguable, such as an adult literacy programme for a literacy
+charity or a US federal grant for a Canadian applicant. They catch gross
+regressions and are not a measure of quality, because nobody with domain
+judgement produced them. The harness prints that caveat on every run until at
+least 50 practitioner labels exist, and a test asserts the shipped file claims
+nothing more than seed status.
+
+**The sheet samples beyond the top matches.** Labelling only what the system
+already ranks highly measures agreement with itself and can never discover a
+good grant sitting at rank 200, so `eval sheet` mixes a random sample from
+further down into the top-k rows.
+
+**Coverage is reported alongside precision.** Precision computed over three
+labelled items inside a top five is a thin number, and the report says what
+fraction of each top-k was actually labelled rather than presenting the ratio
+on its own.
+
+Current state: 13 seed pairs across 6 organizations, gates clean at 0 false
+accepts and 0 false rejects. Those precision figures are a tripwire, not a
+result.
 
 ## Findings that should change the plan
 

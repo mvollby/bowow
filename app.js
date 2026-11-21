@@ -95,14 +95,27 @@ searchForm.addEventListener('submit', event => {
   for (const field of filterFields) {
     if (field.value) params.set(field.id, field.value);
   }
+  // Concept names and triggers mirror bowow_pipeline/topics.py, which is the
+  // canonical vocabulary. Note the phrases: an earlier version matched the
+  // bare word "operating", so a summary saying a charity was "operating from
+  // one site" was tagged as seeking operating costs.
   const summary = byId('program').value.toLowerCase();
   const topics = [
-    ['student aid', /bursar|scholarship|tuition|financial aid/],
-    ['rural access', /rural|remote/],
-    ['learning support', /tutor|mentor|literacy|learning/],
-    ['partnerships', /partner|collaborat|consortium/],
+    ['student aid', /bursar|scholarship|tuition|financial aid|student award/],
+    ['learning support', /tutor|mentor|literacy|numeracy|after school|homework|essential skills|adult learning/],
+    ['rural access', /\brural\b|remote communit|northern communit|underserved/],
+    ['indigenous', /indigenous|first nation|inuit|metis|métis|aboriginal/],
+    ['newcomers', /newcomer|immigrant|refugee|settlement service|language training/],
+    ['youth', /\byouth\b|young people|adolescent/],
+    ['employment skills', /employment|workforce|skills training|job readiness|apprenticeship/],
+    ['operating costs', /operating costs?|core funding|overhead|operational funding|organizational capacity/],
     ['research', /research|fieldwork/],
-    ['operating costs', /operating|capacity|overhead/]
+    ['partnerships', /partnership|consortium|collaborative|coalition/],
+    ['infrastructure', /infrastructure|renovation|capital project|equipment/],
+    ['arts culture', /\barts\b|culture|heritage|museum|festival/],
+    ['health', /health|wellness|wellbeing/],
+    ['food security', /food security|nutrition|food bank/],
+    ['environment', /environment|climate|conservation|biodiversity/]
   ].filter(([, pattern]) => pattern.test(summary)).map(([topic]) => topic);
   if (topics.length) params.set('topics', topics.join(','));
   const target = new URL(searchForm.action);
