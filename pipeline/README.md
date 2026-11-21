@@ -1,4 +1,6 @@
-# BOWOW ingestion pipeline (Phase 1 spike)
+# BOWOW ingestion pipeline
+
+[![tests](https://github.com/mvollby/bowow/actions/workflows/tests.yml/badge.svg)](https://github.com/mvollby/bowow/actions/workflows/tests.yml)
 
 Proves the corpus architecture from the project plan against two real sources
 with deliberately different shapes: a JSON API and a 2.46 GB CSV. Python 3.11+,

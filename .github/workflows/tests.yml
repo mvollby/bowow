@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every failing combination, not just the first.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ['3.11', '3.12', '3.13']
+        include:
+          # This project is developed on Windows and has already been bitten
+          # by cp1252 decoding, a UTF-8 BOM on a cp1252 body, and CRLF
+          # translation. A Linux-only matrix would not have caught any of them.
+          - os: windows-latest
+            python: '3.12'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pytest
+        # The pipeline itself runs on the standard library. The anthropic SDK
+        # is deliberately NOT installed here: the extraction tests stub the
+        # client, so this run also proves the suite needs no API credential
+        # and makes no network calls.
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run tests
+        working-directory: pipeline
+        run: python -m pytest tests -q
