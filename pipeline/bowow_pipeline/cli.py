@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import re
 from pathlib import Path
@@ -18,7 +19,9 @@ from .adapters import adapter_names
 from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
                       extract_cached, get_extractor)
 from .ingest import run_ingest
-from .models import days_until, utcnow
+from .match import rank
+from .models import Org, days_until, utcnow
+from .topics import concepts_for
 from .rawstore import RawStore
 from .store import Store
 
@@ -26,6 +29,7 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA / "bowow.db"
 RAW_PATH = DATA / "raw"
 CACHE_PATH = DATA / "extraction_cache"
+FIXTURE_ORGS = Path(__file__).resolve().parent.parent / "fixtures" / "orgs_ca.json"
 # The static site lives one level up from the pipeline package.
 SITE_ROOT = Path(__file__).resolve().parent.parent.parent
 WEB_DATA = SITE_ROOT / "data" / "opportunities.json"
@@ -44,6 +48,8 @@ def cmd_ingest(args) -> None:
         kwargs["program_filter"] = args.program_filter
     if args.local_path:
         kwargs["local_path"] = args.local_path
+    if args.max_rows is not None:
+        kwargs["max_rows"] = args.max_rows
 
     extractor = cache = None
     if args.extract:
@@ -262,22 +268,86 @@ def cmd_check(args) -> None:
           f"for this sample")
 
 
-# Same topic vocabulary the search form uses, so a program summary typed on
-# the front page can be compared against grants on equal terms. Kept here, in
-# one place, rather than duplicated in JavaScript.
-TOPIC_PATTERNS = (
-    ("student aid", r"bursar|scholarship|tuition|financial aid|student aid"),
-    ("rural access", r"\brural\b|\bremote\b"),
-    ("learning support", r"tutor|mentor|literacy|learning"),
-    ("partnerships", r"partner|collaborat|consortium"),
-    ("research", r"research|fieldwork"),
-    ("operating costs", r"operating|capacity|overhead"),
-)
+def cmd_profiles(args) -> None:
+    store, _ = _open()
+    if args.action == "load":
+        path = Path(args.file) if args.file else FIXTURE_ORGS
+        data = json.loads(path.read_text(encoding="utf-8"))
+        counts = {"inserted": 0, "updated": 0}
+        for record in data["orgs"]:
+            record.pop("_comment", None)
+            org = Org(**record)
+            # Fixture rows are synthetic whatever the file claims. Nothing
+            # loaded from a fixture may present itself as a registry record.
+            org.synthetic = True
+            counts[store.upsert_org(org)] += 1
+        print(f"loaded {path.name}: {counts['inserted']} new, "
+              f"{counts['updated']} updated (all marked synthetic)")
+
+    orgs = store.orgs()
+    print(f"\n{len(orgs)} profiles on file")
+    for org in orgs:
+        rev = f"${org.revenue:,.0f}" if org.revenue is not None else "no filing"
+        tag = " [synthetic]" if org.synthetic else ""
+        print(f"  {org.org_id:24} {org.country} {org.region[:12]:12} "
+              f"{org.applicant_type[:16]:16} {rev:>12}  {org.name[:32]}{tag}")
+    store.close()
 
 
-def _tags_for(*texts: str) -> list[str]:
-    blob = " ".join(t or "" for t in texts).lower()
-    return [name for name, pattern in TOPIC_PATTERNS if re.search(pattern, blob)]
+def cmd_match(args) -> None:
+    store, _ = _open()
+    org = store.find_org(args.org)
+    if org is None:
+        print(f"no profile matching {args.org!r}; try: profiles list")
+        store.close()
+        return
+
+    opportunities = store.all_opportunities()
+    if not opportunities:
+        print("the corpus is empty; run ingest first")
+        store.close()
+        return
+
+    # Funder award history, keyed by funder, for the precedent component.
+    award_index = {}
+    for row in store.conn.execute(
+            "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name"):
+        award_index[(row["funder_name"] or "").lower()] = row["n"]
+
+    results = rank(org, opportunities, award_index or None)
+    eligible = [r for r in results if r.eligible]
+
+    rev = f"${org.revenue:,.0f}" if org.revenue is not None else "not on file"
+    print(f"{org.name}{' [synthetic]' if org.synthetic else ''}")
+    print(f"  {org.applicant_type}, {org.region}, {org.country} | revenue {rev}")
+    print(f"\nscreened {len(results)} opportunities: "
+          f"{len(eligible)} pass every hard gate, "
+          f"{len(results) - len(eligible)} fail at least one")
+
+    reasons = collections.Counter(
+        name for r in results for name, _ in r.failed)
+    if reasons:
+        print("gate failures by cause:")
+        for name, n in reasons.most_common():
+            print(f"  {name:16} {n}")
+
+    shown = (eligible or results)[:args.limit]
+    header = "top matches" if eligible else "nothing passes; closest below"
+    print(f"\n{header}")
+    for r in shown:
+        o = r.opportunity
+        cap = f"up to ${o.amount_max:,}" if o.amount_max else "amount unstated"
+        print(f"\n  {r.rating}/10  {o.title[:58]}")
+        print(f"      {o.funder_name[:50]} | {cap} | {o.deadline or 'no deadline'}")
+        for name, why in r.failed:
+            print(f"      BLOCKED {name}: {why}")
+        for name, why in r.unknown:
+            print(f"      unknown {name}: {why}")
+        for c in r.components:
+            state = f"{c.score:.2f}" if c.known else " -- "
+            print(f"      {state} {c.name:12} {c.explanation}")
+        print(f"      scored on {r.coverage:.0%} of the intended weighting")
+    store.close()
 
 
 def cmd_export(args) -> None:
@@ -314,7 +384,8 @@ def cmd_export(args) -> None:
             "applicant": json.loads(r["applicant_types"] or "[]"),
             "regions": json.loads(r["regions"] or "[]"),
             "purposes": purposes,
-            "tags": _tags_for(r["title"], r["summary"], " ".join(purposes)),
+            "tags": sorted(concepts_for(r["title"], r["summary"],
+                                        " ".join(purposes))),
             "low": r["amount_min"], "high": r["amount_max"],
             "currency": r["currency"], "deadline": r["deadline"],
             "route": r["route"],
@@ -356,6 +427,8 @@ def main(argv=None) -> None:
     i.add_argument("--keyword", help="grants_gov search keyword")
     i.add_argument("--program-filter", help="canada_gc substring filter")
     i.add_argument("--local-path", help="canada_gc: read a local CSV instead")
+    i.add_argument("--max-rows", type=int,
+                   help="canada_programs: award rows to scan (0 = whole file)")
     i.add_argument("--extract", action="store_true",
                    help="run eligibility extraction on low-confidence records")
     i.add_argument("--backend", choices=("auto", "claude", "rules"),
@@ -384,6 +457,16 @@ def main(argv=None) -> None:
     pr = sub.add_parser("precedent", help="funder history for a grantee")
     pr.add_argument("grantee")
     pr.set_defaults(func=cmd_precedent)
+
+    pf = sub.add_parser("profiles", help="load or list applicant profiles")
+    pf.add_argument("action", choices=("load", "list"), nargs="?", default="list")
+    pf.add_argument("--file", help="fixture JSON to load (default: Canadian set)")
+    pf.set_defaults(func=cmd_profiles)
+
+    m = sub.add_parser("match", help="score one organization against the corpus")
+    m.add_argument("org", help="org_id or part of the name")
+    m.add_argument("--limit", type=int, default=3)
+    m.set_defaults(func=cmd_match)
 
     ck = sub.add_parser("check", help="verify extraction credentials and setup")
     ck.add_argument("--live", action="store_true",

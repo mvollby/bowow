@@ -86,6 +86,43 @@ class Opportunity:
 
 
 @dataclass
+class Org:
+    """An applicant organization.
+
+    The fields are the ones a public registry actually gives you: the CRA
+    T3010 return for Canadian charities, IRS Form 990 for US nonprofits. That
+    is deliberate. Everything here should be obtainable from a registry lookup
+    on a business number or EIN, with no document parsing, because that is the
+    cheapest path to a usable profile.
+    """
+    org_id: str
+    name: str
+    country: str                 # ISO-2, e.g. "CA"
+    region: str                  # province or state
+    applicant_type: str          # one of APPLICANT_TYPES
+    registry_id: str = ""        # CRA Business Number or IRS EIN
+    status: str = ""             # e.g. "Registered charity"
+    revenue: float | None = None
+    program_expense: float | None = None
+    categories: list[str] = field(default_factory=list)
+    mission: str = ""
+    beneficiaries: str = ""
+    # True for hand-written test fixtures. Never let synthetic rows be
+    # mistaken for a real registry record, in the database or in any output.
+    synthetic: bool = False
+
+    @property
+    def budget_band(self) -> str:
+        if self.revenue is None:
+            return "unknown"
+        if self.revenue < 250_000:
+            return "small"
+        if self.revenue < 2_000_000:
+            return "mid"
+        return "large"
+
+
+@dataclass
 class Award:
     source: str
     native_id: str
@@ -153,6 +190,24 @@ def strip_html(html: str) -> str:
                          ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'")):
         text = text.replace(entity, char)
     return re.sub(r"[ \t]+", " ", text).strip()
+
+
+# Topic vocabulary shared by the search form, the exporter and the matcher.
+# One definition, so a grant and a program summary are always compared on the
+# same terms.
+TOPIC_PATTERNS = (
+    ("student aid", r"bursar|scholarship|tuition|financial aid|student aid"),
+    ("rural access", r"\brural\b|\bremote\b"),
+    ("learning support", r"tutor|mentor|literacy|learning"),
+    ("partnerships", r"partner|collaborat|consortium"),
+    ("research", r"research|fieldwork"),
+    ("operating costs", r"operating|capacity|overhead"),
+)
+
+
+def tags_for(*texts: str) -> list[str]:
+    blob = " ".join(t or "" for t in texts).lower()
+    return [name for name, pattern in TOPIC_PATTERNS if re.search(pattern, blob)]
 
 
 def days_until(iso_date: str | None, today: date | None = None) -> int | None:

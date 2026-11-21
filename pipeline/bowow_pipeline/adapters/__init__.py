@@ -62,11 +62,13 @@ class SourceAdapter:
 
 def get_adapter(name: str) -> SourceAdapter:
     from .canada_gc import CanadaGrantsAdapter
+    from .canada_programs import CanadaProgramsAdapter
     from .grants_gov import GrantsGovAdapter
 
     registry = {
         GrantsGovAdapter.name: GrantsGovAdapter,
         CanadaGrantsAdapter.name: CanadaGrantsAdapter,
+        CanadaProgramsAdapter.name: CanadaProgramsAdapter,
     }
     if name not in registry:
         raise KeyError(f"unknown adapter {name!r}; have {sorted(registry)}")
@@ -75,5 +77,7 @@ def get_adapter(name: str) -> SourceAdapter:
 
 def adapter_names() -> list[str]:
     from .canada_gc import CanadaGrantsAdapter
+    from .canada_programs import CanadaProgramsAdapter
     from .grants_gov import GrantsGovAdapter
-    return [GrantsGovAdapter.name, CanadaGrantsAdapter.name]
+    return [GrantsGovAdapter.name, CanadaGrantsAdapter.name,
+            CanadaProgramsAdapter.name]

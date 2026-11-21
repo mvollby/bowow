@@ -7,10 +7,13 @@ SDK is optional and only needed for Claude-backed eligibility extraction.
 
 ```bash
 cd pipeline
-python -m bowow_pipeline ingest grants_gov --limit 20 --keyword education
-python -m bowow_pipeline ingest canada_gc  --limit 150
+python -m bowow_pipeline ingest grants_gov     --limit 20 --keyword education
+python -m bowow_pipeline ingest canada_gc      --limit 4000     # award history
+python -m bowow_pipeline ingest canada_programs --limit 600 --max-rows 0
 python -m bowow_pipeline stats
 python -m bowow_pipeline changes
+python -m bowow_pipeline profiles load         # synthetic test organizations
+python -m bowow_pipeline match ca-literacy-mid
 python -m bowow_pipeline precedent "Carleton"
 python -m bowow_pipeline export
 python -m pytest tests/ -q
@@ -146,6 +149,66 @@ verified 5.5 sorted above an unverified 5.7, which looks broken even though
 the order was right. The score measures filter match only. It is not a
 judgement of the grant, and extraction confidence sits beside it as a badge
 rather than being blended in.
+
+## Canadian programmes
+
+Canada publishes no equivalent of the Grants.gov opportunity API. It does
+publish every grant already made, and each row names the programme that funded
+it, so `canada_programs` aggregates award history into a catalogue of real
+programmes with real departments and real award sizes.
+
+Two distinctions have to survive into the UI, and tests hold them there:
+
+- **These are not open calls.** No deadline, and `route` says "Program (no
+  posted call)". They land in the "could not verify" band rather than being
+  presented as something to apply to this week.
+- **Applicant types record who has been funded, not who is eligible.** A
+  programme open to nonprofits that only universities have applied to will
+  show Academia. The provenance says exactly that.
+
+Recipient type codes come from the publisher's schema, not inference: `S` is
+Academia (not School) and `P` is Individual (not Private).
+
+Award ranges follow the sample size, because percentiles only exclude outliers
+when there is a tail: percentiles at 10 or more awards, a trimmed range at 5
+to 9, and below that the figure is published with a note that it is not
+typical.
+
+The published CSV is ordered by department, so a capped scan is a biased
+sample. A 200,000-row scan returned 6 departments and no education ministry;
+the full 1.38M-row pass returns 46. Use `--max-rows 0` for the real thing, at
+about 2.5 GB of download.
+
+## Matching
+
+`match` scores one organization against the corpus in two stages.
+
+**Hard gates** (geography, applicant type, deadline) are binary and auditable.
+A gate the data cannot answer is recorded as unknown, never silently passed.
+
+**Weighted components** each carry a plain-English explanation. The rule that
+matters: a component that cannot be computed is dropped and the remaining
+weights renormalize. It is never scored as zero, because treating "no funder
+history on file" as "this funder has never funded anyone like you" would be a
+fabrication dressed as arithmetic. `coverage` reports how much of the intended
+weighting was actually available, and headroom inside a band scales with it,
+so a grant we know little about cannot read as a near-perfect match.
+
+Topical relevance is not just one component among five. Below a floor, a grant
+is marked off-topic and ranked beneath everything relevant. Weighting alone
+could not express this: four generic components scoring 1.00 outvoted one
+relevant component scoring 0.00, and a dairy farm investment fund outranked a
+literacy programme for a literacy charity.
+
+`topics.py` does the topical work: phrase-based concepts plus TF-IDF cosine
+weighted over the whole corpus. This is lexical similarity, not embeddings; it
+does not know "bursary" and "scholarship" are the same idea unless the lexicon
+says so, which is why the lexicon exists. The interface is the one an
+embedding backend would implement.
+
+Test profiles in `fixtures/orgs_ca.json` are synthetic: invented names,
+deliberately invalid business numbers, `synthetic: true` on every row, and the
+loader overrides that flag regardless of what the file claims.
 
 ## Findings that should change the plan
 
