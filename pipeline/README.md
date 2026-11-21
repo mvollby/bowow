@@ -250,6 +250,44 @@ Test profiles in `fixtures/orgs_ca.json` are synthetic: invented names,
 deliberately invalid business numbers, `synthetic: true` on every row, and the
 loader overrides that flag regardless of what the file claims.
 
+## Evaluation
+
+```bash
+python -m bowow_pipeline eval sheet --org ca-literacy-mid   # rows to label
+python -m bowow_pipeline eval run                           # measure
+```
+
+Labels live in `eval/pairs.jsonl`, one JSON object per line, graded
+`yes` / `maybe` / `no` / `ineligible`. Reported metrics are precision and
+recall at 5 and 10, MRR, and gate accuracy split into false accepts and false
+rejects, because a gate that wrongly rejects is a different failure from a
+score that ranks badly.
+
+Three decisions worth keeping:
+
+**Provenance travels with every label.** `labeler` is the most important field
+in the file. Pairs marked `seed` were labelled during development because the
+answer is not arguable, such as an adult literacy programme for a literacy
+charity or a US federal grant for a Canadian applicant. They catch gross
+regressions and are not a measure of quality, because nobody with domain
+judgement produced them. The harness prints that caveat on every run until at
+least 50 practitioner labels exist, and a test asserts the shipped file claims
+nothing more than seed status.
+
+**The sheet samples beyond the top matches.** Labelling only what the system
+already ranks highly measures agreement with itself and can never discover a
+good grant sitting at rank 200, so `eval sheet` mixes a random sample from
+further down into the top-k rows.
+
+**Coverage is reported alongside precision.** Precision computed over three
+labelled items inside a top five is a thin number, and the report says what
+fraction of each top-k was actually labelled rather than presenting the ratio
+on its own.
+
+Current state: 13 seed pairs across 6 organizations, gates clean at 0 false
+accepts and 0 false rejects. Those precision figures are a tripwire, not a
+result.
+
 ## Findings that should change the plan
 
 **1. The structured eligibility field is mostly empty.** Grants.gov exposes

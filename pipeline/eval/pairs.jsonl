@@ -1,0 +1,33 @@
+# Labelled (organization, opportunity) pairs, one JSON object per line.
+#
+# label    yes | maybe | no | ineligible
+# labeler  who decided. This is the most important field in the file.
+#
+#   "expert" / "grant-writer"  a practitioner's judgement. Only these count
+#                              toward a headline quality figure.
+#   "seed"                     labelled during development because the answer
+#                              is not arguable: an adult literacy programme
+#                              for a literacy charity, a dairy investment fund
+#                              for a tutoring charity, a US federal grant for
+#                              a Canadian applicant. These exist to catch
+#                              gross regressions. They are NOT a measure of
+#                              match quality, because nobody with domain
+#                              judgement produced them, and the harness says
+#                              so until 50+ practitioner labels exist.
+#
+# Never label a pair because the system ranked it highly. That measures
+# agreement with itself. `eval sheet` deliberately mixes in candidates from
+# far down the ranking for this reason.
+{"org_id": "ca-literacy-north-halton", "opportunity_uid": "canada_programs:employment-and-social-development-canada--allesp-crf-grant", "label": "yes", "labeler": "seed", "note": "Adult Learning, Literacy and Essential Skills Program; the organization is a literacy charity"}
+{"org_id": "ca-literacy-north-halton", "opportunity_uid": "canada_programs:employment-and-social-development-canada--allesp-crf-contribution", "label": "yes", "labeler": "seed", "note": "same programme, contribution stream"}
+{"org_id": "ca-literacy-north-halton", "opportunity_uid": "canada_programs:agriculture-and-agri-food-canada--dairy-farm-investment-program-dfip", "label": "no", "labeler": "seed", "note": "dairy farm capital investment, unrelated to adult literacy"}
+{"org_id": "ca-literacy-north-halton", "opportunity_uid": "grants_gov:344124", "label": "ineligible", "labeler": "seed", "note": "US federal programme, Canadian applicant"}
+{"org_id": "ca-literacy-mid", "opportunity_uid": "canada_programs:employment-and-social-development-canada--allesp-crf-grant", "label": "yes", "labeler": "seed", "note": "tutoring and family literacy charity against the adult literacy programme"}
+{"org_id": "ca-literacy-mid", "opportunity_uid": "canada_programs:agriculture-and-agri-food-canada--dairy-farm-investment-program-dfip", "label": "no", "labeler": "seed", "note": "unrelated sector"}
+{"org_id": "ca-literacy-mid", "opportunity_uid": "grants_gov:363752", "label": "ineligible", "labeler": "seed", "note": "US federal programme, Canadian applicant"}
+{"org_id": "ca-rural-bursary", "opportunity_uid": "canada_programs:agriculture-and-agri-food-canada--dairy-farm-investment-program-dfip", "label": "no", "labeler": "seed", "note": "bursary society, unrelated sector"}
+{"org_id": "ca-rural-bursary", "opportunity_uid": "grants_gov:344124", "label": "ineligible", "labeler": "seed", "note": "US federal programme, Canadian applicant"}
+{"org_id": "ca-tiny-volunteer", "opportunity_uid": "canada_programs:agriculture-and-agri-food-canada--dairy-farm-investment-program-dfip", "label": "no", "labeler": "seed", "note": "youth mentoring, unrelated sector"}
+{"org_id": "us-control-literacy", "opportunity_uid": "canada_programs:employment-and-social-development-canada--allesp-crf-grant", "label": "ineligible", "labeler": "seed", "note": "Canadian federal programme, US applicant"}
+{"org_id": "us-control-literacy", "opportunity_uid": "canada_programs:agriculture-and-agri-food-canada--dairy-farm-investment-program-dfip", "label": "ineligible", "labeler": "seed", "note": "Canadian federal programme, US applicant"}
+{"org_id": "us-770568469", "opportunity_uid": "canada_programs:employment-and-social-development-canada--allesp-crf-grant", "label": "ineligible", "labeler": "seed", "note": "Canadian federal programme, US applicant"}

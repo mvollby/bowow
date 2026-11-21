@@ -21,6 +21,7 @@ from .extract import (DEFAULT_MODEL, ExtractionCache, apply_extraction,
 from .ingest import run_ingest
 from .match import rank
 from .models import Org, days_until, utcnow
+from .evaluate import evaluate, labelling_sheet, load_pairs
 from .registry import get_registry
 from .topics import concepts_for
 from .rawstore import RawStore
@@ -32,6 +33,8 @@ RAW_PATH = DATA / "raw"
 CACHE_PATH = DATA / "extraction_cache"
 FIXTURE_ORGS = Path(__file__).resolve().parent.parent / "fixtures" / "orgs_ca.json"
 REGISTRY_CACHE = DATA / "registry"
+EVAL_DIR = Path(__file__).resolve().parent.parent / "eval"
+EVAL_PAIRS = EVAL_DIR / "pairs.jsonl"
 # The static site lives one level up from the pipeline package.
 SITE_ROOT = Path(__file__).resolve().parent.parent.parent
 WEB_DATA = SITE_ROOT / "data" / "opportunities.json"
@@ -401,6 +404,77 @@ def cmd_match(args) -> None:
     store.close()
 
 
+def _award_index(store) -> dict:
+    return {(r["funder_name"] or "").lower(): r["n"] for r in store.conn.execute(
+        "SELECT funder_name, COUNT(*) n FROM award GROUP BY funder_name")}
+
+
+def cmd_eval(args) -> None:
+    store, _ = _open()
+    opportunities = store.all_opportunities()
+    orgs = {o.org_id: o for o in store.orgs()}
+    idx = _award_index(store) or None
+
+    if args.action == "sheet":
+        org = store.find_org(args.org) if args.org else None
+        targets = [org] if org else list(orgs.values())
+        if args.org and org is None:
+            print(f"no profile matching {args.org!r}")
+            store.close()
+            return
+        rows = []
+        for target in targets:
+            rows += labelling_sheet(target, opportunities, idx,
+                                    top=args.top, sample=args.sample)
+        EVAL_DIR.mkdir(parents=True, exist_ok=True)
+        out = Path(args.out) if args.out else EVAL_DIR / "to_label.csv"
+        import csv as _csv
+        with open(out, "w", newline="", encoding="utf-8") as fh:
+            writer = _csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"wrote {len(rows)} rows to label -> {out}")
+        print("fill in label (yes/maybe/no/ineligible) and labeler, then")
+        print("append the completed rows to eval/pairs.jsonl")
+        store.close()
+        return
+
+    path = Path(args.pairs) if args.pairs else EVAL_PAIRS
+    if not path.exists():
+        print(f"no label file at {path}; run: eval sheet")
+        store.close()
+        return
+    pairs = load_pairs(path)
+    report = evaluate(pairs, orgs, opportunities, idx)
+
+    print(f"labelled pairs {report.pairs_total}  scored {report.pairs_scored}  "
+          f"organizations {report.org_count}")
+    for who, n in sorted(report.by_labeler.items()):
+        print(f"  {who:16} {n}")
+    if report.missing:
+        print(f"  skipped {len(report.missing)} pairs not present in this corpus")
+        for item in report.missing[:3]:
+            print(f"     {item}")
+
+    print()
+    for k in sorted(report.precision_at):
+        print(f"  precision@{k:<3} {report.precision_at[k]:.2f}   "
+              f"recall@{k:<3} {report.recall_at[k]:.2f}   "
+              f"(labelled coverage of top {k}: {report.coverage_at[k]:.0%})")
+    print(f"  MRR         {report.mrr:.2f}")
+
+    print(f"\n  gate false accepts {len(report.false_accepts)}  "
+          f"false rejects {len(report.false_rejects)}")
+    for org_id, uid, reason in report.false_rejects[:3]:
+        print(f"     rejected on {reason}: {org_id} -> {uid[:52]}")
+
+    if not report.headline_is_trustworthy:
+        print(f"\n  NOTE: only {report.expert_pairs} pairs carry a practitioner "
+              f"label. These figures are a regression tripwire, not a measure "
+              f"of match quality. Label 50+ pairs before quoting them.")
+    store.close()
+
+
 def cmd_export(args) -> None:
     """Write the corpus as JSON for the front end to fetch.
 
@@ -525,6 +599,15 @@ def main(argv=None) -> None:
     m.add_argument("org", help="org_id or part of the name")
     m.add_argument("--limit", type=int, default=3)
     m.set_defaults(func=cmd_match)
+
+    ev = sub.add_parser("eval", help="measure match quality against labels")
+    ev.add_argument("action", choices=("run", "sheet"), nargs="?", default="run")
+    ev.add_argument("--org", help="sheet: limit to one organization")
+    ev.add_argument("--pairs", help="run: label file (default eval/pairs.jsonl)")
+    ev.add_argument("--out", help="sheet: output csv path")
+    ev.add_argument("--top", type=int, default=10)
+    ev.add_argument("--sample", type=int, default=5)
+    ev.set_defaults(func=cmd_eval)
 
     ck = sub.add_parser("check", help="verify extraction credentials and setup")
     ck.add_argument("--live", action="store_true",
