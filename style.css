@@ -122,3 +122,12 @@ dialog form{display:flex;justify-content:flex-end;margin-top:15px}
 .grant-flags{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0}
 .flag{font-size:11px;color:var(--muted);border:1px solid #2f3f5f;border-radius:999px;padding:2px 8px}
 .flag.warn{color:#e0b685;border-color:#54452f}
+
+/* Component breakdown on a scored match. Unknown components are shown, not
+   hidden: a score whose reasoning is invisible is not worth acting on, and
+   "we could not compute this" is part of the reasoning. */
+.components{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:3px}
+.component{display:flex;gap:8px;font-size:12px;color:var(--muted);align-items:baseline}
+.component-score{flex:none;width:34px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text)}
+.component.unknown{opacity:.72}
+.component.unknown .component-score{color:var(--muted)}

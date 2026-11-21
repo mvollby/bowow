@@ -118,9 +118,48 @@ searchForm.addEventListener('submit', event => {
     ['environment', /environment|climate|conservation|biodiversity/]
   ].filter(([, pattern]) => pattern.test(summary)).map(([topic]) => topic);
   if (topics.length) params.set('topics', topics.join(','));
+
   const target = new URL(searchForm.action);
-  target.search = params.toString();
-  location.assign(target);
+  const website = byId('website').value.trim();
+  const rawSummary = byId('program').value.trim();
+
+  // Send the two text fields to the pipeline so they become a real profile
+  // and get scored by the real matcher. Without an API present this is a
+  // no-op and the page falls back to filter-only matching, so the static
+  // site keeps working on its own.
+  if (!website && !rawSummary) {
+    target.search = params.toString();
+    location.assign(target);
+    return;
+  }
+
+  const submit = searchForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  submit.textContent = 'Saving profile...';
+
+  fetch('api/profile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({website, program_summary: rawSummary}),
+  })
+    .then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || response.statusText);
+      params.set('org', data.org_id);
+    })
+    .catch(error => {
+      // A validation failure is worth showing; a missing API is not an
+      // error, it just means the richer matching is unavailable.
+      if (error instanceof TypeError) {
+        console.info('no profile API; falling back to filter-only matching');
+      } else {
+        params.set('profile_error', error.message);
+      }
+    })
+    .finally(() => {
+      target.search = params.toString();
+      location.assign(target);
+    });
 });
 
 for (const trigger of document.querySelectorAll('[data-dialog]')) {

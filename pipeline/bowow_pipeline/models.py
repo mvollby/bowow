@@ -107,6 +107,11 @@ class Org:
     categories: list[str] = field(default_factory=list)
     mission: str = ""
     beneficiaries: str = ""
+    # Stored only. Deliberately never fetched server side: a user-supplied
+    # URL that the server requests is a server-side request forgery vector,
+    # and crawling an applicant's site is its own piece of work with its own
+    # risks.
+    website: str = ""
     # True for hand-written test fixtures. Never let synthetic rows be
     # mistaken for a real registry record, in the database or in any output.
     synthetic: bool = False

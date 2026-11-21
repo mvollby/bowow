@@ -221,6 +221,48 @@ included; with it, the top match is the Adult Learning, Literacy and Essential
 Skills Programme at 0.83. A mission typed by the applicant would be better
 still, and is the obvious next input.
 
+## Web profile API
+
+```bash
+cd pipeline
+python -m bowow_pipeline serve        # site + API on http://127.0.0.1:8000
+```
+
+The four profile cards on the front page used to collect data that went
+nowhere: the website field was never read and the program summary was
+lowercased for a keyword parse and then discarded. The two text fields now
+reach the pipeline.
+
+- `POST /api/profile` with `{website, program_summary}` creates or updates an
+  Org. The summary becomes the mission, which is the strongest topical signal
+  the matcher has, since no registry publishes one.
+- `GET /api/match?org_id=...` scores that profile with the real matcher and
+  returns every component with its explanation, including the ones that could
+  not be computed.
+- `results.html` uses the scored path when a profile exists and falls back to
+  filter-only matching otherwise, so the static site still works alone.
+
+Deliberate choices:
+
+**The website is stored and never fetched.** Requesting a user-supplied URL
+from the server is a server-side request forgery vector, and the API response
+says so rather than leaving it implicit. Crawling an applicant's site for
+mission text is separate work with its own risks.
+
+**One origin**, so there is no CORS layer, and **localhost only**: this is a
+development server built on `http.server`, not a hardened one.
+
+**The same validation as the CLI**, so the API cannot write a profile the CLI
+would refuse.
+
+**No caching of static files.** A browser serving a cached `app.js` silently
+defeats every front-end change and is indistinguishable from a bug in the new
+code; that cost real debugging time here.
+
+**The funder precedent index is built once per process.** It parses about
+33 MB of CRA CSVs, and rebuilding it per request left the results page blank
+and apparently broken while it waited. Restart the server after re-ingesting.
+
 ## Matching
 
 `match` scores one organization against the corpus in two stages.

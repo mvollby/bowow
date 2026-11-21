@@ -227,7 +227,137 @@ function card(grant, index) {
   return el;
 }
 
-fetch(DATA_URL)
+/* When a profile was saved, the server can score it with the real matcher:
+ * hard gates, weighted components, funder precedent. That is strictly better
+ * than the filter-only path below, which knows nothing about the applicant.
+ * The filter path remains for visitors who typed nothing. */
+function renderScored(payload) {
+  byId('edit-search').search = new URLSearchParams(params).toString();
+
+  const org = payload.org;
+  const summary = byId('match-summary');
+  const best = payload.matches[0];
+  summary.textContent = best
+    ? `${best.name} leads at ${best.rating}/10 for ${org.name}.`
+    : `No opportunity passes every gate for ${org.name}.`;
+  if (!org.has_mission) {
+    summary.textContent += ' Add a program summary to improve topical matching.';
+  }
+
+  byId('corpus-note').textContent =
+    `Scored ${payload.screened} opportunities against your profile: `
+    + `${payload.eligible} pass every hard gate, ${payload.on_topic} of those `
+    + `relate to your programs. Scores rank fit with your profile and are not `
+    + `a judgement of the grant.`;
+  byId('match-count').textContent =
+    `${payload.eligible} eligible · ${payload.on_topic} on topic`;
+
+  const list = byId('result-list');
+  list.replaceChildren();
+  for (const [index, match] of payload.matches.entries()) {
+    list.append(scoredCard(match, index));
+  }
+}
+
+function scoredCard(match, index) {
+  const el = document.createElement('article');
+  el.className = 'grant-card';
+  el.innerHTML = `
+    <div class="grant-body">
+      <div class="provider"><span class="provider-mark" aria-hidden="true"></span><div><strong></strong><span class="provider-domain"></span></div></div>
+      <h3></h3>
+      <p class="grant-meta"></p>
+      <p class="grant-misses" hidden><strong>Blocked by</strong> <span></span></p>
+      <p class="grant-unknown" hidden><strong>Could not verify</strong> <span></span></p>
+      <ul class="components"></ul>
+      <p class="grant-flags"></p>
+      <a class="grant-link" target="_blank" rel="noopener noreferrer">View funding source ↗</a>
+    </div>
+    <div class="grant-score"><div class="score-ring"><strong></strong><span>/ 10</span></div><span class="score-label"></span></div>`;
+
+  const host = match.url ? new URL(match.url).hostname : '';
+  el.querySelector('.provider-mark').textContent =
+    (match.funder || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  el.querySelector('.provider strong').textContent = match.funder;
+  el.querySelector('.provider-domain').textContent = host;
+  el.querySelector('h3').textContent = match.name;
+
+  const range = match.low != null && match.high != null
+    ? `${match.currency} ${amount.format(match.low)}–${amount.format(match.high)}`
+    : match.high != null ? `${match.currency} up to ${amount.format(match.high)}`
+    : 'Award amount unstated';
+  el.querySelector('.grant-meta').textContent = [
+    range, match.route || 'Route unstated',
+    match.deadline ? date.format(new Date(match.deadline)) : 'Deadline unspecified',
+  ].join(' · ');
+
+  if (match.blocked.length) {
+    const node = el.querySelector('.grant-misses');
+    node.hidden = false;
+    node.querySelector('span').textContent =
+      match.blocked.map(b => `${b.gate}: ${b.why}`).join(' · ');
+  }
+  if (match.unverified.length) {
+    const node = el.querySelector('.grant-unknown');
+    node.hidden = false;
+    node.querySelector('span').textContent =
+      match.unverified.map(u => `${u.gate}: ${u.why}`).join(' · ');
+  }
+
+  // Every component, including the ones we could not compute. A score with
+  // no visible reasoning is not worth acting on.
+  const components = el.querySelector('.components');
+  for (const c of match.components) {
+    const li = document.createElement('li');
+    li.className = c.score === null ? 'component unknown' : 'component';
+    const score = document.createElement('span');
+    score.className = 'component-score';
+    score.textContent = c.score === null ? '—' : c.score.toFixed(2);
+    const why = document.createElement('span');
+    why.textContent = c.explanation;
+    li.append(score, why);
+    components.append(li);
+  }
+
+  const flag = document.createElement('span');
+  flag.className = 'flag';
+  flag.textContent = `scored on ${Math.round(match.coverage * 100)}% of the intended weighting`;
+  el.querySelector('.grant-flags').append(flag);
+
+  el.querySelector('.grant-link').href = match.url;
+
+  const ring = el.querySelector('.score-ring');
+  ring.classList.add(match.blocked.length ? 'review-fit'
+    : match.off_topic ? 'unsure-fit'
+    : match.rating >= 7 ? 'strong-fit' : 'good-fit');
+  ring.style.setProperty('--rating', match.rating * 10 + '%');
+  ring.querySelector('strong').textContent = match.rating.toFixed(1);
+  el.querySelector('.score-label').textContent =
+    match.blocked.length ? 'Not eligible'
+    : match.off_topic ? 'Off topic'
+    : index === 0 ? 'Best match' : 'Scored match';
+  return el;
+}
+
+const profileError = filter('profile_error');
+if (profileError) {
+  byId('match-summary').textContent = `Profile not saved: ${profileError}`;
+}
+
+const orgId = filter('org');
+if (orgId) {
+  // Scoring a profile against the whole corpus takes a moment on a cold
+  // server. Without this the page is simply blank while it waits, which is
+  // indistinguishable from a failure.
+  byId('match-summary').textContent = 'Scoring your profile against the corpus...';
+}
+const load = orgId
+  ? fetch(`api/match?org_id=${encodeURIComponent(orgId)}&limit=10`)
+      .then(r => r.ok ? r.json().then(renderScored)
+                      : Promise.reject(new Error(`${r.status} ${r.statusText}`)))
+  : Promise.reject(new Error('no profile'));
+
+load.catch(() => fetch(DATA_URL)
   .then(response => {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     return response.json();
@@ -240,4 +370,4 @@ fetch(DATA_URL)
     byId('corpus-note').textContent =
       `${DATA_URL} did not load (${error.message}). Generate it with: `
       + `cd pipeline, then python -m bowow_pipeline export`;
-  });
+  }));
